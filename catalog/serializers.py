@@ -15,15 +15,20 @@ from .models import (
 )
 
 GRADE_SCHEMA = {
-    "type": "object",
-    "description": "Шкала оценки: ключи -1/0/1 (негативно/нейтрально/позитивно), значения — человекочитаемые метки.",
-    "properties": {
-        "-1": {"type": "string"},
-        "0": {"type": "string"},
-        "1": {"type": "string"},
+    "type": "array",
+    "description": (
+        "Шкала оценки как упорядоченный список пар {value, label}. "
+        "Список — чтобы сохранять порядок отображения в админке/фронте и допускать дубли "
+        "value (две разные подписи на одно и то же числовое значение)."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "value": {"type": "integer", "description": "Числовое значение оценки."},
+            "label": {"type": "string", "description": "Человекочитаемая подпись."},
+        },
+        "required": ["value", "label"],
     },
-    "required": ["-1", "0", "1"],
-    "additionalProperties": False,
 }
 
 TASTE_CRITERIA_SCHEMA = {

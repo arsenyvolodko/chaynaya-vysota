@@ -430,14 +430,16 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
 
         criteria_breakdown = []
         for cid, criteria in criteria_obj_by_id.items():
-            grade = criteria.grade or {}
-            try:
-                grade_keys = [int(k) for k in grade.keys()]
-            except (TypeError, ValueError):
-                grade_keys = []
+            grade = criteria.grade or []
+            values: list[int] = []
+            for item in grade:
+                try:
+                    values.append(int(item["value"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
             count = criteria_product_count[cid]
-            min_total = (min(grade_keys) * count) if grade_keys else 0
-            max_total = (max(grade_keys) * count) if grade_keys else 0
+            min_total = (min(values) * count) if values else 0
+            max_total = (max(values) * count) if values else 0
             criteria_breakdown.append({
                 "id": cid,
                 "name": criteria.name,
