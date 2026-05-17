@@ -1,0 +1,13 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ${SOURCE_STATIC_ROOT}:${STATIC_ROOT}
+      - ${SOURCE_MEDIA_ROOT}:${MEDIA_ROOT}
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    command: ./entrypoint.sh

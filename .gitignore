@@ -1,0 +1,13 @@
+.env
+*.pyc
+__pycache__/
+*.sqlite3
+.DS_Store
+.idea/
+.venv/
+venv/
+staticfiles/
+media/
+*.log
+.claude/
+CLAUDE.local.md

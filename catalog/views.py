@@ -1,0 +1,465 @@
+from collections import defaultdict
+from decimal import ROUND_HALF_UP, Decimal
+
+from django.db import transaction
+from django.db.models import Prefetch
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from rest_framework import status
+from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.mixins import RetrieveModelMixin
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
+
+from .models import (
+    IceCreamTasteTags,
+    Product,
+    ProductCriteriaReview,
+    ProductReview,
+    ProductTasteCriteria,
+    ProductTasting,
+    ProductTastingUserMark,
+    ProductTypeEnum,
+    TasteCriteria,
+    Tasting,
+    TastingParticipation,
+)
+from .serializers import (
+    NominateResponseSerializer,
+    NominateWriteSerializer,
+    PodiumPatchSerializer,
+    PodiumSnapshotSerializer,
+    ProductReviewWriteSerializer,
+    ProductSerializer,
+    TastingDetailSerializer,
+    TastingListSerializer,
+    TastingParticipationSerializer,
+    TastingResultSerializer,
+)
+
+
+def _user_reviews_prefetch(user):
+    if user.is_authenticated:
+        qs = ProductReview.objects.filter(user=user).prefetch_related("criteria_reviews", "taste_tags")
+    else:
+        qs = ProductReview.objects.none()
+    return Prefetch("reviews", queryset=qs, to_attr="_user_reviews")
+
+
+def _user_marks_prefetch(user):
+    if user.is_authenticated:
+        marks_qs = ProductTastingUserMark.objects.filter(user=user)
+    else:
+        marks_qs = ProductTastingUserMark.objects.none()
+    pt_qs = ProductTasting.objects.select_related("tasting").prefetch_related(
+        Prefetch("user_marks", queryset=marks_qs, to_attr="_user_marks_list")
+    )
+    return Prefetch("producttasting_set", queryset=pt_qs, to_attr="_pt_for_marks")
+
+
+_PRODUCT_RELATED = ("line",)
+_PRODUCT_PREFETCH = (
+    "logos",
+    "taste_tags",
+    Prefetch(
+        "producttastecriteria_set",
+        queryset=ProductTasteCriteria.objects.select_related("criteria").order_by("order", "id"),
+        to_attr="_taste_criteria_rows",
+    ),
+)
+
+
+_TRUTHY = {"true", "1", "yes", "t", "y"}
+_FALSY = {"false", "0", "no", "f", "n"}
+
+
+def _parse_query_bool(value: str | None, *, field: str) -> bool | None:
+    if value is None:
+        return None
+    lowered = value.lower()
+    if lowered in _TRUTHY:
+        return True
+    if lowered in _FALSY:
+        return False
+    raise ValidationError({field: "Must be a boolean (true/false)."})
+
+
+@extend_schema_view(
+    list=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="type",
+                description="Filter by product type",
+                required=False,
+                type=str,
+                enum=[choice[0] for choice in ProductTypeEnum.choices],
+            ),
+            OpenApiParameter(
+                name="name",
+                description="Case-insensitive substring match on name",
+                required=False,
+                type=str,
+            ),
+            OpenApiParameter(
+                name="tasted",
+                description="Filter by whether the current user has tasted the product. "
+                "For anonymous users, `tasted=true` returns an empty list.",
+                required=False,
+                type=bool,
+            ),
+            OpenApiParameter(
+                name="bookmarked",
+                description="Filter by whether the current user has bookmarked the product. "
+                "For anonymous users, `bookmarked=true` returns an empty list.",
+                required=False,
+                type=bool,
+            ),
+        ]
+    )
+)
+class ProductViewSet(ReadOnlyModelViewSet):
+    serializer_class = ProductSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        qs = Product.objects.all().order_by("id").select_related(*_PRODUCT_RELATED).prefetch_related(*_PRODUCT_PREFETCH)
+        product_type = self.request.query_params.get("type")
+        name = self.request.query_params.get("name")
+        tasted = _parse_query_bool(self.request.query_params.get("tasted"), field="tasted")
+        bookmarked = _parse_query_bool(self.request.query_params.get("bookmarked"), field="bookmarked")
+
+        if product_type:
+            qs = qs.filter(type=product_type)
+        if name:
+            qs = qs.filter(name__icontains=name)
+
+        user = self.request.user
+        if tasted is not None:
+            if user.is_authenticated:
+                qs = (
+                    qs.filter(reviews__user=user, reviews__tasted=True)
+                    if tasted
+                    else qs.exclude(reviews__user=user, reviews__tasted=True)
+                )
+            elif tasted:
+                qs = qs.none()
+
+        if bookmarked is not None:
+            if user.is_authenticated:
+                qs = (
+                    qs.filter(reviews__user=user, reviews__is_bookmarked=True)
+                    if bookmarked
+                    else qs.exclude(reviews__user=user, reviews__is_bookmarked=True)
+                )
+            elif bookmarked:
+                qs = qs.none()
+
+        if user.is_authenticated:
+            qs = qs.prefetch_related(_user_reviews_prefetch(user), _user_marks_prefetch(user))
+        return qs
+
+    @extend_schema(request=ProductReviewWriteSerializer, responses={200: ProductSerializer, 201: ProductSerializer})
+    @action(detail=True, methods=["post"], url_path="review", permission_classes=[IsAuthenticated])
+    def review(self, request, pk=None):
+        product = self.get_object()
+        payload = ProductReviewWriteSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        criteria_marks = data.get("criteria_marks")
+        criteria_pairs = self._resolve_criteria_marks(product, criteria_marks) if criteria_marks else []
+
+        tag_ids = data.get("taste_tags")
+        resolved_tags = self._resolve_taste_tags(product, tag_ids) if tag_ids is not None else None
+
+        meaningful_keys = {"global_comment", "self_comment", "composition", "criteria_marks", "taste_tags"}
+        implies_tasted = bool(meaningful_keys & data.keys())
+
+        with transaction.atomic():
+            review, created = ProductReview.objects.get_or_create(user=request.user, product=product)
+
+            for field in ("global_comment", "self_comment", "composition", "tasted", "is_bookmarked"):
+                if field in data:
+                    setattr(review, field, data[field])
+            if implies_tasted and not review.tasted:
+                review.tasted = True
+            review.save()
+
+            for criteria, mark in criteria_pairs:
+                ProductCriteriaReview.objects.update_or_create(
+                    product_review=review,
+                    criteria=criteria,
+                    defaults={"mark": mark},
+                )
+
+            if resolved_tags is not None:
+                review.taste_tags.set(resolved_tags)
+
+        product.__dict__["_cached_user_review"] = review
+        return Response(
+            ProductSerializer(product, context={"request": request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @staticmethod
+    def _resolve_criteria_marks(product: Product, criteria_marks: dict[str, int]) -> list[tuple[TasteCriteria, int]]:
+        try:
+            wanted_ids = {int(key): mark for key, mark in criteria_marks.items()}
+        except (TypeError, ValueError):
+            raise ValidationError({"criteria_marks": "Keys must be integer TasteCriteria ids."})
+
+        linked = {c.pk: c for c in product.taste_criteria.filter(pk__in=wanted_ids.keys())}
+        missing = sorted(wanted_ids.keys() - linked.keys())
+        if missing:
+            raise ValidationError(
+                {"criteria_marks": f"Criteria not linked to this product: {missing}."}
+            )
+        return [(linked[cid], mark) for cid, mark in wanted_ids.items()]
+
+    @staticmethod
+    def _resolve_taste_tags(product: Product, tag_ids: list[int]) -> list[IceCreamTasteTags]:
+        wanted = set(tag_ids)
+        linked = list(product.taste_tags.filter(pk__in=wanted))
+        missing = sorted(wanted - {t.pk for t in linked})
+        if missing:
+            raise ValidationError(
+                {"taste_tags": f"Tags not linked to this product: {missing}."}
+            )
+        return linked
+
+
+class TastingViewSet(RetrieveModelMixin, GenericViewSet):
+
+    def get_queryset(self):
+        qs = Tasting.objects.all()
+        if self.action == "retrieve":
+            user = self.request.user
+            product_qs = Product.objects.select_related(*_PRODUCT_RELATED).prefetch_related(*_PRODUCT_PREFETCH)
+            if user.is_authenticated:
+                product_qs = product_qs.prefetch_related(_user_reviews_prefetch(user), _user_marks_prefetch(user))
+            combo_qs = Product.objects.prefetch_related("logos")
+            pt_prefetch = Prefetch(
+                "producttasting_set",
+                queryset=ProductTasting.objects.prefetch_related(
+                    Prefetch("product", queryset=product_qs),
+                    Prefetch("tea_flavor_combination", queryset=combo_qs),
+                ).order_by("order"),
+                to_attr="_pt_rows",
+            )
+            qs = qs.prefetch_related(pt_prefetch)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == "join":
+            return TastingParticipationSerializer
+        if self.action == "my":
+            return TastingListSerializer
+        return TastingDetailSerializer
+
+    def get_permissions(self):
+        if self.action == "retrieve":
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    @extend_schema(request=None, responses={200: TastingParticipationSerializer, 201: TastingParticipationSerializer})
+    @action(detail=True, methods=["post"], url_path="join")
+    def join(self, request, pk=None):
+        tasting = self.get_object()
+        with transaction.atomic():
+            participation, created = TastingParticipation.objects.get_or_create(
+                tasting=tasting,
+                user=request.user,
+            )
+            product_ids = tasting.products.values_list("id", flat=True)
+            ProductReview.objects.bulk_create(
+                [ProductReview(user=request.user, product_id=pid, tasted=True) for pid in product_ids],
+                ignore_conflicts=True,
+            )
+            ProductReview.objects.filter(
+                user=request.user, product_id__in=product_ids, tasted=False,
+            ).update(tasted=True)
+        serializer = self.get_serializer(participation)
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(responses={200: TastingListSerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="my")
+    def my(self, request):
+        qs = Tasting.objects.filter(participants=request.user).order_by("-date")
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=NominateWriteSerializer, responses={200: NominateResponseSerializer})
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"products/(?P<product_id>[0-9a-fA-F-]+)/nominate",
+        permission_classes=[IsAuthenticated],
+    )
+    def nominate(self, request, pk=None, product_id=None):
+        tasting = self.get_object()
+        product_tasting = ProductTasting.objects.filter(tasting=tasting, product_id=product_id).first()
+        if product_tasting is None:
+            raise NotFound("Product is not part of this tasting.")
+
+        body = NominateWriteSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        is_nominated = body.validated_data["is_nominated"]
+
+        mark, created = ProductTastingUserMark.objects.get_or_create(
+            user=request.user,
+            product_tasting=product_tasting,
+            defaults={"is_nominated": is_nominated},
+        )
+        if not created and mark.is_nominated != is_nominated:
+            mark.is_nominated = is_nominated
+            mark.save(update_fields=["is_nominated", "updated_at"])
+
+        return Response({"is_nominated": mark.is_nominated, "podium_place": mark.podium_place})
+
+    @extend_schema(request=PodiumPatchSerializer, responses={200: PodiumSnapshotSerializer})
+    @action(detail=True, methods=["patch"], url_path="podium", permission_classes=[IsAuthenticated])
+    def podium(self, request, pk=None):
+        tasting = self.get_object()
+        body = PodiumPatchSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+
+        place_to_field = {1: "first", 2: "second", 3: "third"}
+        field_to_place = {v: k for k, v in place_to_field.items()}
+
+        with transaction.atomic():
+            for field, place in field_to_place.items():
+                if field not in body.validated_data:
+                    continue
+                target_product_id = body.validated_data[field]
+
+                ProductTastingUserMark.objects.filter(
+                    user=request.user, tasting=tasting, podium_place=place,
+                ).update(podium_place=None)
+
+                if target_product_id is None:
+                    continue
+
+                pt = ProductTasting.objects.filter(tasting=tasting, product_id=target_product_id).first()
+                if pt is None:
+                    raise NotFound(f"Product {target_product_id} is not part of this tasting.")
+
+                mark, _ = ProductTastingUserMark.objects.get_or_create(
+                    user=request.user,
+                    product_tasting=pt,
+                )
+                mark.podium_place = place
+                mark.save(update_fields=["podium_place", "updated_at"])
+
+        snapshot = {"first": None, "second": None, "third": None}
+        current = ProductTastingUserMark.objects.filter(
+            user=request.user, tasting=tasting, podium_place__isnull=False,
+        ).select_related("product_tasting")
+        for m in current:
+            snapshot[place_to_field[m.podium_place]] = m.product_tasting.product_id
+        return Response(snapshot)
+
+    @extend_schema(responses={200: TastingResultSerializer})
+    @action(detail=True, methods=["get"], url_path="result", permission_classes=[IsAuthenticated])
+    def result(self, request, pk=None):
+        tasting = self.get_object()
+        user = request.user
+        product_ids = list(tasting.products.values_list("id", flat=True))
+
+        podium_marks = list(
+            ProductTastingUserMark.objects.filter(
+                user=user, tasting=tasting, podium_place__isnull=False,
+            )
+            .select_related("product_tasting__product")
+            .order_by("podium_place")
+        )
+        favorite_marks = list(
+            ProductTastingUserMark.objects.filter(
+                user=user, tasting=tasting, is_nominated=True, podium_place__isnull=True,
+            ).select_related("product_tasting__product")
+        )
+
+        scored_product_ids = [m.product_tasting.product_id for m in podium_marks]
+        reviews_by_product = {
+            r.product_id: r
+            for r in ProductReview.objects.filter(user=user, product_id__in=scored_product_ids)
+            .prefetch_related("criteria_reviews", "taste_tags")
+        }
+
+        podium = [
+            {
+                "place": m.podium_place,
+                "id": m.product_tasting.product_id,
+                "name": m.product_tasting.product.name,
+                "number": m.product_tasting.product.number,
+                "total_score": _review_total_score(reviews_by_product.get(m.product_tasting.product_id)),
+            }
+            for m in podium_marks
+        ]
+        favorites = [
+            {
+                "id": m.product_tasting.product_id,
+                "name": m.product_tasting.product.name,
+                "number": m.product_tasting.product.number,
+            }
+            for m in favorite_marks
+        ]
+
+        ptc_rows = (
+            ProductTasteCriteria.objects.filter(product_id__in=product_ids)
+            .select_related("criteria")
+        )
+        criteria_obj_by_id: dict[int, TasteCriteria] = {}
+        criteria_product_count: dict[int, int] = defaultdict(int)
+        for row in ptc_rows:
+            criteria_obj_by_id[row.criteria_id] = row.criteria
+            criteria_product_count[row.criteria_id] += 1
+
+        user_totals: dict[int, int] = defaultdict(int)
+        if criteria_obj_by_id:
+            user_mark_rows = ProductCriteriaReview.objects.filter(
+                product_review__user=user,
+                product_review__product_id__in=product_ids,
+                criteria_id__in=criteria_obj_by_id.keys(),
+            ).values_list("criteria_id", "mark")
+            for cid, mark in user_mark_rows:
+                user_totals[cid] += mark
+
+        criteria_breakdown = []
+        for cid, criteria in criteria_obj_by_id.items():
+            grade = criteria.grade or {}
+            try:
+                grade_keys = [int(k) for k in grade.keys()]
+            except (TypeError, ValueError):
+                grade_keys = []
+            count = criteria_product_count[cid]
+            min_total = (min(grade_keys) * count) if grade_keys else 0
+            max_total = (max(grade_keys) * count) if grade_keys else 0
+            criteria_breakdown.append({
+                "id": cid,
+                "name": criteria.name,
+                "min_total": min_total,
+                "max_total": max_total,
+                "user_total": user_totals.get(cid, 0),
+            })
+
+        return Response({
+            "tasting_id": tasting.id,
+            "title": tasting.title,
+            "result_description": tasting.result_description,
+            "podium": podium,
+            "favorites": favorites,
+            "criteria_breakdown": criteria_breakdown,
+        })
+
+
+def _review_total_score(review: ProductReview | None) -> int | None:
+    if review is None:
+        return None
+    marks_sum = sum(cr.mark for cr in review.criteria_reviews.all())
+    weights_sum = sum(t.weight for t in review.taste_tags.all())
+    total = Decimal(str(marks_sum + weights_sum))
+    return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
