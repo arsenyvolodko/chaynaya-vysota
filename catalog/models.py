@@ -39,6 +39,7 @@ class IceCreamLogo(models.Model):
 class TasteCriteria(models.Model):
     name = models.CharField(max_length=127)
     grade = models.JSONField(blank=True, default=list)
+    description = models.TextField(blank=True, null=True)
 
     def __str__(self) -> str:
         return self.name
