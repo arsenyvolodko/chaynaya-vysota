@@ -11,4 +11,6 @@ staticfiles/
 media/
 *.log
 .claude/
+cicd.sh
+queries/
 CLAUDE.local.md

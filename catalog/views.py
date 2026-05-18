@@ -30,6 +30,7 @@ from .serializers import (
     NominateWriteSerializer,
     PodiumPatchSerializer,
     PodiumSnapshotSerializer,
+    ProductInTastingSerializer,
     ProductReviewWriteSerializer,
     ProductSerializer,
     TastingDetailSerializer,
@@ -233,7 +234,7 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
 
     def get_queryset(self):
         qs = Tasting.objects.all()
-        if self.action == "retrieve":
+        if self.action in ("products", "product_detail"):
             user = self.request.user
             product_qs = Product.objects.select_related(*_PRODUCT_RELATED).prefetch_related(*_PRODUCT_PREFETCH)
             if user.is_authenticated:
@@ -250,6 +251,32 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             qs = qs.prefetch_related(pt_prefetch)
         return qs
 
+    def _products_in_tasting(self, tasting: Tasting, user) -> list[Product]:
+        rows = getattr(tasting, "_pt_rows", None)
+        if rows is None:
+            rows = list(
+                ProductTasting.objects.filter(tasting=tasting)
+                .select_related("product")
+                .prefetch_related("tea_flavor_combination")
+                .order_by("order")
+            )
+
+        marks_by_pid: dict = {}
+        if user.is_authenticated:
+            marks = ProductTastingUserMark.objects.filter(user=user, tasting=tasting).select_related(
+                "product_tasting"
+            )
+            marks_by_pid = {m.product_tasting.product_id: m for m in marks}
+
+        products: list[Product] = []
+        for pt in rows:
+            p = pt.product
+            p.__dict__["_tea_flavor_combination"] = list(pt.tea_flavor_combination.all())
+            p.__dict__["_category"] = pt.category
+            p.__dict__["_current_tasting_mark"] = marks_by_pid.get(p.id)
+            products.append(p)
+        return products
+
     def get_serializer_class(self):
         if self.action == "join":
             return TastingParticipationSerializer
@@ -258,9 +285,34 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
         return TastingDetailSerializer
 
     def get_permissions(self):
-        if self.action == "retrieve":
+        if self.action in ("retrieve", "products", "product_detail"):
             return [AllowAny()]
         return [IsAuthenticated()]
+
+    @extend_schema(responses={200: ProductInTastingSerializer(many=True)})
+    @action(detail=True, methods=["get"], url_path="products")
+    def products(self, request, pk=None):
+        tasting = self.get_object()
+        products = self._products_in_tasting(tasting, request.user)
+        return Response(
+            ProductInTastingSerializer(products, many=True, context={"request": request}).data
+        )
+
+    @extend_schema(responses={200: ProductInTastingSerializer})
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"products/(?P<product_id>[0-9a-fA-F-]+)",
+    )
+    def product_detail(self, request, pk=None, product_id=None):
+        tasting = self.get_object()
+        products = self._products_in_tasting(tasting, request.user)
+        target = next((p for p in products if str(p.id) == str(product_id)), None)
+        if target is None:
+            raise NotFound("Product is not part of this tasting.")
+        return Response(
+            ProductInTastingSerializer(target, context={"request": request}).data
+        )
 
     @extend_schema(request=None, responses={200: TastingParticipationSerializer, 201: TastingParticipationSerializer})
     @action(detail=True, methods=["post"], url_path="join")
@@ -429,7 +481,8 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
                 user_totals[cid] += mark
 
         criteria_breakdown = []
-        for cid, criteria in criteria_obj_by_id.items():
+        for criteria in sorted(criteria_obj_by_id.values(), key=lambda c: (c.order, c.id)):
+            cid = criteria.id
             grade = criteria.grade or []
             values: list[int] = []
             for item in grade:

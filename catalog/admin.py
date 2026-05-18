@@ -48,9 +48,10 @@ class IceCreamLogoAdmin(admin.ModelAdmin):
 
 @admin.register(TasteCriteria)
 class TasteCriteriaAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "grade")
+    list_display = ("id", "order", "name", "grade")
+    list_editable = ("order",)
     search_fields = ("name", "id")
-    ordering = ("name",)
+    ordering = ("order", "id")
 
 
 class ProductIceCreamLogoInline(admin.TabularInline):

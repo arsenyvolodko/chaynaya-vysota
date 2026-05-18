@@ -322,9 +322,17 @@ class ProductReviewWriteSerializer(serializers.Serializer):
 
 class ProductInTastingSerializer(ProductSerializer):
     tea_flavor_combination = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    is_nominated = serializers.SerializerMethodField()
+    podium_place = serializers.SerializerMethodField()
 
     class Meta(ProductSerializer.Meta):
-        fields = ProductSerializer.Meta.fields + ["tea_flavor_combination"]
+        fields = ProductSerializer.Meta.fields + [
+            "tea_flavor_combination",
+            "category",
+            "is_nominated",
+            "podium_place",
+        ]
 
     @extend_schema_field(TEA_FLAVOR_SCHEMA)
     def get_tea_flavor_combination(self, obj: Product) -> list[dict]:
@@ -340,6 +348,17 @@ class ProductInTastingSerializer(ProductSerializer):
             }
             for p in combinations
         ]
+
+    def get_category(self, obj: Product) -> str | None:
+        return obj.__dict__.get("_category")
+
+    def get_is_nominated(self, obj: Product) -> bool:
+        mark = obj.__dict__.get("_current_tasting_mark")
+        return bool(mark and mark.is_nominated)
+
+    def get_podium_place(self, obj: Product) -> int | None:
+        mark = obj.__dict__.get("_current_tasting_mark")
+        return mark.podium_place if mark else None
 
 
 def _first_logo_url(product: Product, request) -> str | None:
@@ -357,22 +376,9 @@ class TastingListSerializer(serializers.ModelSerializer):
 
 
 class TastingDetailSerializer(serializers.ModelSerializer):
-    products = serializers.SerializerMethodField()
-
     class Meta:
         model = Tasting
-        fields = ["id", "title", "description", "date", "products"]
-
-    @extend_schema_field(ProductInTastingSerializer(many=True))
-    def get_products(self, obj: Tasting):
-        rows = getattr(obj, "_pt_rows", None)
-        if rows is None:
-            rows = list(obj.producttasting_set.select_related("product").order_by("order"))
-        products = []
-        for pt in rows:
-            pt.product.__dict__["_tea_flavor_combination"] = list(pt.tea_flavor_combination.all())
-            products.append(pt.product)
-        return ProductInTastingSerializer(products, many=True, context=self.context).data
+        fields = ["id", "title", "description", "result_description", "date"]
 
 
 class TastingParticipationSerializer(serializers.ModelSerializer):
