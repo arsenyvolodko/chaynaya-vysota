@@ -566,7 +566,7 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             })
         tea_matches.sort(key=lambda x: (x["tea_name"] or "", str(x["tea_id"])))
 
-        ice_cream_stats = _ice_cream_stats(product_ids, request)
+        ice_cream_stats = _ice_cream_stats(_reviewed_product_ids(user, product_ids), request)
 
         return Response({
             "tasting_id": tasting.id,
@@ -590,7 +590,27 @@ def _review_total_score(review: ProductReview | None) -> int | None:
     return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def _ice_cream_stats(product_ids: list, request) -> dict[str, dict[str, dict]]:
+def _reviewed_product_ids(user, product_ids: list) -> set:
+    reviews = (
+        ProductReview.objects.filter(user=user, product_id__in=product_ids)
+        .prefetch_related("criteria_reviews", "taste_tags")
+    )
+    reviewed: set = set()
+    for r in reviews:
+        if (
+            r.global_comment
+            or r.self_comment
+            or r.composition
+            or list(r.criteria_reviews.all())
+            or list(r.taste_tags.all())
+        ):
+            reviewed.add(r.product_id)
+    return reviewed
+
+
+def _ice_cream_stats(product_ids, request) -> dict[str, dict[str, dict]]:
+    if not product_ids:
+        return {}
     rows = (
         ProductIceCreamLogo.objects.filter(product_id__in=product_ids)
         .select_related("logo")
