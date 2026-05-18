@@ -2,7 +2,7 @@ from collections import defaultdict
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import status
 from rest_framework.decorators import action
@@ -501,6 +501,70 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
                 "user_total": user_totals.get(cid, 0),
             })
 
+        top_tags_qs = (
+            IceCreamTasteTags.objects.filter(
+                reviews__user=user,
+                reviews__product_id__in=product_ids,
+            )
+            .annotate(count=Count("reviews", distinct=True))
+            .order_by("-count", "id")[:3]
+        )
+        top_tags = [
+            {"id": t.id, "name": t.name, "weight": t.weight, "count": t.count}
+            for t in top_tags_qs
+        ]
+
+        pt_with_combos = (
+            ProductTasting.objects.filter(tasting=tasting)
+            .select_related("product")
+            .prefetch_related(
+                Prefetch("tea_flavor_combination", queryset=Product.objects.prefetch_related("logos")),
+            )
+        )
+        tea_obj_by_id: dict = {}
+        tea_to_products: dict = defaultdict(set)
+        product_obj_by_id: dict = {}
+        for pt in pt_with_combos:
+            product_obj_by_id[pt.product_id] = pt.product
+            for tea in pt.tea_flavor_combination.all():
+                tea_obj_by_id[tea.id] = tea
+                tea_to_products[tea.id].add(pt.product_id)
+
+        match_criteria_ids = set(
+            ProductTasteCriteria.objects.filter(
+                product_id__in=product_ids, for_tea_combination=True,
+            ).values_list("criteria_id", flat=True).distinct()
+        )
+        match_scores: dict = defaultdict(int)
+        if match_criteria_ids and tea_to_products:
+            match_rows = ProductCriteriaReview.objects.filter(
+                product_review__user=user,
+                product_review__product_id__in=product_ids,
+                criteria_id__in=match_criteria_ids,
+            ).values_list("product_review__product_id", "mark")
+            for pid, mark in match_rows:
+                match_scores[pid] += mark
+
+        tea_matches = []
+        for tea_id, paired_pids in tea_to_products.items():
+            scored = [(pid, match_scores[pid]) for pid in paired_pids if pid in match_scores]
+            if not scored:
+                continue
+            scored.sort(key=lambda x: (-x[1], str(x[0])))
+            top_pid, top_score = scored[0]
+            tea = tea_obj_by_id[tea_id]
+            top_product = product_obj_by_id[top_pid]
+            tea_matches.append({
+                "tea_id": tea.id,
+                "tea_name": tea.name,
+                "tea_logo": _logo_url(tea, request),
+                "product_id": top_product.id,
+                "product_name": top_product.name,
+                "product_number": top_product.number,
+                "match_score": top_score,
+            })
+        tea_matches.sort(key=lambda x: (x["tea_name"] or "", str(x["tea_id"])))
+
         return Response({
             "tasting_id": tasting.id,
             "title": tasting.title,
@@ -508,6 +572,8 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             "podium": podium,
             "favorites": favorites,
             "criteria_breakdown": criteria_breakdown,
+            "top_tags": top_tags,
+            "tea_matches": tea_matches,
         })
 
 
@@ -518,3 +584,11 @@ def _review_total_score(review: ProductReview | None) -> int | None:
     weights_sum = sum(t.weight for t in review.taste_tags.all())
     total = Decimal(str(marks_sum + weights_sum))
     return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _logo_url(product: Product, request) -> str | None:
+    logo = next(iter(product.logos.all()), None)
+    if logo is None or not logo.image:
+        return None
+    url = logo.image.url
+    return request.build_absolute_uri(url) if request is not None else url

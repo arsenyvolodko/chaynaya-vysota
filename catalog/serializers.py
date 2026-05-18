@@ -146,6 +146,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
     tasted = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
+    is_reviewed = serializers.SerializerMethodField()
     self_comment = serializers.SerializerMethodField()
     global_comment = serializers.SerializerMethodField()
     user_composition = serializers.SerializerMethodField()
@@ -169,6 +170,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "taste_tags",
             "tasted",
             "is_bookmarked",
+            "is_reviewed",
+            "color",
+            "result_phrase",
             "self_comment",
             "global_comment",
             "user_composition",
@@ -201,6 +205,20 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_is_bookmarked(self, obj: Product) -> bool:
         review = self._user_review(obj)
         return bool(review and review.is_bookmarked)
+
+    def get_is_reviewed(self, obj: Product) -> bool:
+        review = self._user_review(obj)
+        if review is None:
+            return False
+        if review.global_comment or review.self_comment:
+            return True
+        if review.composition:
+            return True
+        if list(review.criteria_reviews.all()):
+            return True
+        if list(review.taste_tags.all()):
+            return True
+        return False
 
     def get_self_comment(self, obj: Product) -> str | None:
         review = self._user_review(obj)
@@ -410,6 +428,23 @@ class TastingResultCriteriaItemSerializer(serializers.Serializer):
     user_total = serializers.IntegerField()
 
 
+class TastingResultTopTagItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    weight = serializers.FloatField()
+    count = serializers.IntegerField()
+
+
+class TastingResultTeaMatchSerializer(serializers.Serializer):
+    tea_id = serializers.UUIDField()
+    tea_name = serializers.CharField()
+    tea_logo = serializers.CharField(allow_null=True)
+    product_id = serializers.UUIDField()
+    product_name = serializers.CharField()
+    product_number = serializers.IntegerField(allow_null=True)
+    match_score = serializers.IntegerField()
+
+
 class TastingResultSerializer(serializers.Serializer):
     tasting_id = serializers.UUIDField()
     title = serializers.CharField()
@@ -417,6 +452,8 @@ class TastingResultSerializer(serializers.Serializer):
     podium = TastingResultPodiumItemSerializer(many=True)
     favorites = TastingResultFavoriteItemSerializer(many=True)
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
+    top_tags = TastingResultTopTagItemSerializer(many=True)
+    tea_matches = TastingResultTeaMatchSerializer(many=True)
 
 
 class NominateWriteSerializer(serializers.Serializer):

@@ -1,7 +1,7 @@
 import uuid
 
 from django.conf import settings
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import FileExtensionValidator, MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -29,11 +29,15 @@ class IceCreamTasteTags(models.Model):
 
 
 class IceCreamLogo(models.Model):
-    image = models.ImageField(upload_to="ice_cream_logo/")
+    image = models.FileField(
+        upload_to="ice_cream_logo/",
+        validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "svg"])],
+    )
+    intro_name = models.CharField(max_length=127)
     text = models.CharField(max_length=127, null=True, blank=True, default=None)
 
     def __str__(self) -> str:
-        return self.text or f"Логотип #{self.pk}"
+        return self.intro_name or f"Логотип #{self.pk}"
 
 
 class TasteCriteria(models.Model):
@@ -68,6 +72,8 @@ class Product(models.Model):
     logos = models.ManyToManyField(IceCreamLogo, related_name="products", blank=True, through="ProductIceCreamLogo")
     taste_criteria = models.ManyToManyField(TasteCriteria, related_name="products", blank=True, through="ProductTasteCriteria")
     taste_tags = models.ManyToManyField(IceCreamTasteTags, related_name="products", blank=True)
+    result_phrase = models.TextField(blank=True, null=True)
+    color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
 
     def __str__(self) -> str:
         return f"{self.get_type_display()} — {self.name}"
