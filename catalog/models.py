@@ -62,7 +62,12 @@ class Product(models.Model):
     description = models.TextField(blank=True, null=True)
     interesting_fact = models.TextField(blank=True, null=True)
     composition = models.JSONField(blank=True, default=list)
-    image = models.ImageField(upload_to="products/", blank=True, null=True)
+    image = models.FileField(
+        upload_to="products/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "svg"])],
+    )
     tasters = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         through="ProductReview",
