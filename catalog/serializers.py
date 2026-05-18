@@ -446,6 +446,27 @@ class TastingResultTeaMatchSerializer(serializers.Serializer):
     match_score = serializers.IntegerField()
 
 
+ICE_CREAM_STATS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+            "type": "object",
+            "properties": {
+                "amount": {"type": "integer"},
+                "image": {"type": "string", "format": "uri", "nullable": True},
+            },
+            "required": ["amount", "image"],
+        },
+    },
+    "description": (
+        "Группировка IceCreamLogo всех продуктов дегустации: "
+        "ice_cream_stats[<IceCreamLogo.type>][<IceCreamLogo.text>] = {amount, image}. "
+        "amount — число уникальных продуктов с таким логотипом, image — URL одного из них."
+    ),
+}
+
+
 class TastingResultSerializer(serializers.Serializer):
     tasting_id = serializers.UUIDField()
     title = serializers.CharField()
@@ -455,6 +476,10 @@ class TastingResultSerializer(serializers.Serializer):
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
     top_tags = TastingResultTopTagItemSerializer(many=True)
     tea_matches = TastingResultTeaMatchSerializer(many=True)
+    ice_cream_stats = serializers.DictField()
+
+    class Meta:
+        swagger_schema_fields = {"ice_cream_stats": ICE_CREAM_STATS_SCHEMA}
 
 
 class NominateWriteSerializer(serializers.Serializer):

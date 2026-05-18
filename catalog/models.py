@@ -35,6 +35,7 @@ class IceCreamLogo(models.Model):
     )
     intro_name = models.CharField(max_length=127)
     text = models.CharField(max_length=127, null=True, blank=True, default=None)
+    type = models.CharField(choices=ProductTypeEnum.choices, default=ProductTypeEnum.TEA)  # noqa
 
     def __str__(self) -> str:
         return self.intro_name or f"Логотип #{self.pk}"

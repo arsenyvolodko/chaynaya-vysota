@@ -16,6 +16,7 @@ from .models import (
     IceCreamTasteTags,
     Product,
     ProductCriteriaReview,
+    ProductIceCreamLogo,
     ProductReview,
     ProductTasteCriteria,
     ProductTasting,
@@ -565,6 +566,8 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             })
         tea_matches.sort(key=lambda x: (x["tea_name"] or "", str(x["tea_id"])))
 
+        ice_cream_stats = _ice_cream_stats(product_ids, request)
+
         return Response({
             "tasting_id": tasting.id,
             "title": tasting.title,
@@ -574,6 +577,7 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             "criteria_breakdown": criteria_breakdown,
             "top_tags": top_tags,
             "tea_matches": tea_matches,
+            "ice_cream_stats": ice_cream_stats,
         })
 
 
@@ -584,6 +588,41 @@ def _review_total_score(review: ProductReview | None) -> int | None:
     weights_sum = sum(t.weight for t in review.taste_tags.all())
     total = Decimal(str(marks_sum + weights_sum))
     return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _ice_cream_stats(product_ids: list, request) -> dict[str, dict[str, dict]]:
+    rows = (
+        ProductIceCreamLogo.objects.filter(product_id__in=product_ids)
+        .select_related("logo")
+        .order_by("id")
+    )
+
+    products_by_bucket: dict[tuple[str, str], set] = defaultdict(set)
+    image_by_bucket: dict[tuple[str, str], str | None] = {}
+    for row in rows:
+        logo = row.logo
+        text = logo.text
+        if not text:
+            continue
+        key = (logo.type, text)
+        products_by_bucket[key].add(row.product_id)
+        if key not in image_by_bucket:
+            image_by_bucket[key] = _file_url(logo.image, request)
+
+    stats: dict[str, dict[str, dict]] = defaultdict(dict)
+    for (type_, text), pids in products_by_bucket.items():
+        stats[type_][text] = {
+            "amount": len(pids),
+            "image": image_by_bucket.get((type_, text)),
+        }
+    return stats
+
+
+def _file_url(file_field, request) -> str | None:
+    if not file_field:
+        return None
+    url = file_field.url
+    return request.build_absolute_uri(url) if request is not None else url
 
 
 def _logo_url(product: Product, request) -> str | None:
