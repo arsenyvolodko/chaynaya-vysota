@@ -450,21 +450,55 @@ ICE_CREAM_STATS_SCHEMA = {
     "type": "object",
     "additionalProperties": {
         "type": "object",
+        "description": "Ключ верхнего уровня — IceCreamLogo.type (например, 'ice_cream' или 'tea').",
         "additionalProperties": {
             "type": "object",
+            "description": "Ключ — IceCreamLogo.text (название позиции).",
             "properties": {
-                "amount": {"type": "integer"},
-                "image": {"type": "string", "format": "uri", "nullable": True},
+                "amount": {
+                    "type": "integer",
+                    "description": "Число уникальных продуктов в дегустации, у которых есть IceCreamLogo с таким type+text.",
+                    "example": 2,
+                },
+                "image": {
+                    "type": "string",
+                    "format": "uri",
+                    "nullable": True,
+                    "description": "URL одного из IceCreamLogo.image в этой группе.",
+                    "example": "https://api.example.com/media/ice_cream_logo/gelato.png",
+                },
             },
             "required": ["amount", "image"],
         },
     },
     "description": (
         "Группировка IceCreamLogo всех продуктов дегустации: "
-        "ice_cream_stats[<IceCreamLogo.type>][<IceCreamLogo.text>] = {amount, image}. "
-        "amount — число уникальных продуктов с таким логотипом, image — URL одного из них."
+        "ice_cream_stats[<IceCreamLogo.type>][<IceCreamLogo.text>] = {amount, image}."
     ),
+    "example": {
+        "ice_cream": {
+            "джелато": {
+                "amount": 2,
+                "image": "https://api.example.com/media/ice_cream_logo/gelato.png",
+            },
+        },
+        "tea": {
+            "красный чай": {
+                "amount": 1,
+                "image": "https://api.example.com/media/ice_cream_logo/red_tea.png",
+            },
+            "черный чай": {
+                "amount": 1,
+                "image": "https://api.example.com/media/ice_cream_logo/black_tea.png",
+            },
+        },
+    },
 }
+
+
+@extend_schema_field(ICE_CREAM_STATS_SCHEMA)
+class IceCreamStatsField(serializers.DictField):
+    pass
 
 
 class TastingResultSerializer(serializers.Serializer):
@@ -476,10 +510,7 @@ class TastingResultSerializer(serializers.Serializer):
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
     top_tags = TastingResultTopTagItemSerializer(many=True)
     tea_matches = TastingResultTeaMatchSerializer(many=True)
-    ice_cream_stats = serializers.DictField()
-
-    class Meta:
-        swagger_schema_fields = {"ice_cream_stats": ICE_CREAM_STATS_SCHEMA}
+    ice_cream_stats = IceCreamStatsField()
 
 
 class NominateWriteSerializer(serializers.Serializer):
