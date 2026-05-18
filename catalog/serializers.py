@@ -380,10 +380,9 @@ class ProductInTastingSerializer(ProductSerializer):
 
 
 def _first_logo_url(product: Product, request) -> str | None:
-    logo = next(iter(product.logos.all()), None)
-    if logo is None or not logo.image:
+    if not product.image:
         return None
-    url = logo.image.url
+    url = product.image.url
     return request.build_absolute_uri(url) if request is not None else url
 
 
