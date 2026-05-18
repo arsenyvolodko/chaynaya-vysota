@@ -22,6 +22,17 @@ class GuestRegisterSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=150)
 
 
+class GuestAuthSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20, validators=[validate_phone])
+    name = serializers.CharField(max_length=150)
+
+
+class GuestAuthResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    created = serializers.BooleanField()
+
+
 class GuestProfileUpdateSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20, validators=[validate_phone], required=False)
     name = serializers.CharField(max_length=150, required=False)

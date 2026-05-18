@@ -9,6 +9,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .serializers import (
+    GuestAuthResponseSerializer,
+    GuestAuthSerializer,
     GuestProfileSerializer,
     GuestProfileUpdateSerializer,
     GuestRegisterSerializer,
@@ -52,6 +54,28 @@ class GuestRegisterView(APIView):
         return Response(_issue_tokens(user), status=status.HTTP_201_CREATED)
 
 
+class GuestAuthView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(request=GuestAuthSerializer, responses={200: GuestAuthResponseSerializer, 201: GuestAuthResponseSerializer})
+    def post(self, request):
+        serializer = GuestAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data["phone"]
+        name = serializer.validated_data["name"]
+
+        user, created = User.objects.get_or_create(
+            phone=phone,
+            defaults={"username": _generate_username(), "first_name": name},
+        )
+
+        tokens = _issue_tokens(user)
+        return Response(
+            {**tokens, "created": created},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
 class GuestLoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -72,8 +96,12 @@ class GuestLoginView(APIView):
         return Response(_issue_tokens(user), status=status.HTTP_200_OK)
 
 
-class GuestUpdateProfileView(APIView):
+class GuestMeView(APIView):
     permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: GuestProfileSerializer})
+    def get(self, request):
+        return Response(GuestProfileSerializer(request.user).data, status=status.HTTP_200_OK)
 
     @extend_schema(request=GuestProfileUpdateSerializer, responses={200: GuestProfileSerializer})
     def put(self, request):

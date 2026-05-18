@@ -89,7 +89,8 @@ class ProductAdmin(admin.ModelAdmin):
     ordering = ("type", "number", "name")
     fieldsets = (
         (None, {"fields": ("type", "number", "name", "line")}),
-        ("Контент", {"fields": ("description", "interesting_fact", "composition", "image", "thumb")}),
+        ("Контент", {"fields": ("description", "interesting_fact", "composition", "image", "thumb", "color")}),
+        ("Результат", {"fields": ("result_phrase",)}),
         ("Теги", {"fields": ("taste_tags",)}),
     )
     inlines = [ProductIceCreamLogoInline, ProductTasteCriteriaInline, ProductInTastingsInline]
