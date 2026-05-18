@@ -38,6 +38,7 @@ TASTE_CRITERIA_SCHEMA = {
         "properties": {
             "id": {"type": "integer"},
             "name": {"type": "string"},
+            "description": {"type": "string", "nullable": True},
             "grade": GRADE_SCHEMA,
             "for_tea_combination": {
                 "type": "boolean",
@@ -50,7 +51,7 @@ TASTE_CRITERIA_SCHEMA = {
                 "description": "Оценка текущего пользователя по критерию; null, если он не оценивал.",
             },
         },
-        "required": ["id", "name", "grade", "for_tea_combination", "user_grade_review"],
+        "required": ["id", "name", "description", "grade", "for_tea_combination", "user_grade_review"],
     },
 }
 
@@ -302,6 +303,7 @@ class ProductSerializer(serializers.ModelSerializer):
             {
                 "id": row.criteria_id,
                 "name": row.criteria.name,
+                "description": row.criteria.description,
                 "grade": row.criteria.grade,
                 "for_tea_combination": row.for_tea_combination,
                 "user_grade_review": marks.get(row.criteria_id),
