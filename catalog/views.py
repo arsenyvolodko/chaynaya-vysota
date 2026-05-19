@@ -644,9 +644,3 @@ def _file_url(file_field, request) -> str | None:
     url = file_field.url
     return request.build_absolute_uri(url) if request is not None else url
 
-
-def _logo_url(product: Product, request) -> str | None:
-    if not product.image:
-        return None
-    url = product.image.url
-    return request.build_absolute_uri(url) if request is not None else url
