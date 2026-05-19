@@ -4,6 +4,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import (
+    Config,
     IceCreamLogo,
     IceCreamTasteTags,
     Product,
@@ -553,3 +554,9 @@ class PodiumSnapshotSerializer(serializers.Serializer):
     first = serializers.UUIDField(allow_null=True)
     second = serializers.UUIDField(allow_null=True)
     third = serializers.UUIDField(allow_null=True)
+
+
+class ConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Config
+        fields = ["show_share_link", "share_text"]

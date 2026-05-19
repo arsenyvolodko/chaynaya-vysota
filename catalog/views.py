@@ -10,9 +10,11 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
 
 from .models import (
+    Config,
     IceCreamTasteTags,
     Product,
     ProductCriteriaReview,
@@ -27,6 +29,7 @@ from .models import (
     TastingParticipation,
 )
 from .serializers import (
+    ConfigSerializer,
     NominateResponseSerializer,
     NominateWriteSerializer,
     PodiumPatchSerializer,
@@ -436,6 +439,14 @@ class ResultViewSet(RetrieveModelMixin, GenericViewSet):
     def retrieve(self, request, *args, **kwargs):
         participation = self.get_object()
         return Response(_build_tasting_result(participation, request))
+
+
+class ConfigView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses={200: ConfigSerializer})
+    def get(self, request):
+        return Response(ConfigSerializer(Config.load()).data)
 
 
 def _build_tasting_result(participation: TastingParticipation, request) -> dict:

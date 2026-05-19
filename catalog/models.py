@@ -244,3 +244,24 @@ class ProductTastingUserMark(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} → {self.product_tasting}"
+
+
+class Config(models.Model):
+    show_share_link = models.BooleanField(default=False)
+    share_text = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "Конфиг"
+        verbose_name_plural = "Конфиг"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls) -> "Config":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self) -> str:
+        return "Конфиг"

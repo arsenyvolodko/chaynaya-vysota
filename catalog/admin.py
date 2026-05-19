@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from .models import (
+    Config,
     IceCreamLogo,
     IceCreamTasteTags,
     Line,
@@ -239,3 +240,15 @@ class ProductTastingUserMarkAdmin(admin.ModelAdmin):
             .get_queryset(request)
             .select_related("user", "tasting", "product_tasting__product")
         )
+
+
+@admin.register(Config)
+class ConfigAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "show_share_link")
+    fields = ("show_share_link", "share_text")
+
+    def has_add_permission(self, request):
+        return not Config.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
