@@ -419,166 +419,188 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
     @action(detail=True, methods=["get"], url_path="result", permission_classes=[IsAuthenticated])
     def result(self, request, pk=None):
         tasting = self.get_object()
-        user = request.user
-        product_ids = list(tasting.products.values_list("id", flat=True))
+        participation = TastingParticipation.objects.filter(
+            tasting=tasting, user=request.user,
+        ).first()
+        if participation is None:
+            raise NotFound("You have not joined this tasting.")
+        return Response(_build_tasting_result(participation, request))
 
-        podium_marks = list(
-            ProductTastingUserMark.objects.filter(
-                user=user, tasting=tasting, podium_place__isnull=False,
-            )
-            .select_related("product_tasting__product")
-            .order_by("podium_place")
-        )
-        favorite_marks = list(
-            ProductTastingUserMark.objects.filter(
-                user=user, tasting=tasting, is_nominated=True, podium_place__isnull=True,
-            ).select_related("product_tasting__product")
-        )
 
-        scored_product_ids = [m.product_tasting.product_id for m in podium_marks]
-        reviews_by_product = {
-            r.product_id: r
-            for r in ProductReview.objects.filter(user=user, product_id__in=scored_product_ids)
-            .prefetch_related("criteria_reviews", "taste_tags")
+class ResultViewSet(RetrieveModelMixin, GenericViewSet):
+    queryset = TastingParticipation.objects.select_related("tasting", "user")
+    permission_classes = [AllowAny]
+    serializer_class = TastingResultSerializer
+
+    @extend_schema(responses={200: TastingResultSerializer})
+    def retrieve(self, request, *args, **kwargs):
+        participation = self.get_object()
+        return Response(_build_tasting_result(participation, request))
+
+
+def _build_tasting_result(participation: TastingParticipation, request) -> dict:
+    tasting = participation.tasting
+    user = participation.user
+    product_ids = list(tasting.products.values_list("id", flat=True))
+
+    podium_marks = list(
+        ProductTastingUserMark.objects.filter(
+            user=user, tasting=tasting, podium_place__isnull=False,
+        )
+        .select_related("product_tasting__product")
+        .order_by("podium_place")
+    )
+    favorite_marks = list(
+        ProductTastingUserMark.objects.filter(
+            user=user, tasting=tasting, is_nominated=True, podium_place__isnull=True,
+        ).select_related("product_tasting__product")
+    )
+
+    scored_product_ids = [m.product_tasting.product_id for m in podium_marks]
+    reviews_by_product = {
+        r.product_id: r
+        for r in ProductReview.objects.filter(user=user, product_id__in=scored_product_ids)
+        .prefetch_related("criteria_reviews", "taste_tags")
+    }
+
+    podium = [
+        {
+            "place": m.podium_place,
+            "id": m.product_tasting.product_id,
+            "name": m.product_tasting.product.name,
+            "number": m.product_tasting.product.number,
+            "total_score": _review_total_score(reviews_by_product.get(m.product_tasting.product_id)),
         }
+        for m in podium_marks
+    ]
+    favorites = [
+        {
+            "id": m.product_tasting.product_id,
+            "name": m.product_tasting.product.name,
+            "number": m.product_tasting.product.number,
+        }
+        for m in favorite_marks
+    ]
 
-        podium = [
-            {
-                "place": m.podium_place,
-                "id": m.product_tasting.product_id,
-                "name": m.product_tasting.product.name,
-                "number": m.product_tasting.product.number,
-                "total_score": _review_total_score(reviews_by_product.get(m.product_tasting.product_id)),
-            }
-            for m in podium_marks
-        ]
-        favorites = [
-            {
-                "id": m.product_tasting.product_id,
-                "name": m.product_tasting.product.name,
-                "number": m.product_tasting.product.number,
-            }
-            for m in favorite_marks
-        ]
+    ptc_rows = (
+        ProductTasteCriteria.objects.filter(product_id__in=product_ids)
+        .select_related("criteria")
+    )
+    criteria_obj_by_id: dict[int, TasteCriteria] = {}
+    criteria_product_count: dict[int, int] = defaultdict(int)
+    for row in ptc_rows:
+        criteria_obj_by_id[row.criteria_id] = row.criteria
+        criteria_product_count[row.criteria_id] += 1
 
-        ptc_rows = (
-            ProductTasteCriteria.objects.filter(product_id__in=product_ids)
-            .select_related("criteria")
-        )
-        criteria_obj_by_id: dict[int, TasteCriteria] = {}
-        criteria_product_count: dict[int, int] = defaultdict(int)
-        for row in ptc_rows:
-            criteria_obj_by_id[row.criteria_id] = row.criteria
-            criteria_product_count[row.criteria_id] += 1
+    user_totals: dict[int, int] = defaultdict(int)
+    if criteria_obj_by_id:
+        user_mark_rows = ProductCriteriaReview.objects.filter(
+            product_review__user=user,
+            product_review__product_id__in=product_ids,
+            criteria_id__in=criteria_obj_by_id.keys(),
+        ).values_list("criteria_id", "mark")
+        for cid, mark in user_mark_rows:
+            user_totals[cid] += mark
 
-        user_totals: dict[int, int] = defaultdict(int)
-        if criteria_obj_by_id:
-            user_mark_rows = ProductCriteriaReview.objects.filter(
-                product_review__user=user,
-                product_review__product_id__in=product_ids,
-                criteria_id__in=criteria_obj_by_id.keys(),
-            ).values_list("criteria_id", "mark")
-            for cid, mark in user_mark_rows:
-                user_totals[cid] += mark
-
-        criteria_breakdown = []
-        for criteria in sorted(criteria_obj_by_id.values(), key=lambda c: (c.order, c.id)):
-            cid = criteria.id
-            grade = criteria.grade or []
-            values: list[int] = []
-            for item in grade:
-                try:
-                    values.append(int(item["value"]))
-                except (KeyError, TypeError, ValueError):
-                    continue
-            count = criteria_product_count[cid]
-            min_total = (min(values) * count) if values else 0
-            max_total = (max(values) * count) if values else 0
-            criteria_breakdown.append({
-                "id": cid,
-                "name": criteria.name,
-                "min_total": min_total,
-                "max_total": max_total,
-                "user_total": user_totals.get(cid, 0),
-            })
-
-        top_tags_qs = (
-            IceCreamTasteTags.objects.filter(
-                reviews__user=user,
-                reviews__product_id__in=product_ids,
-            )
-            .annotate(count=Count("reviews", distinct=True))
-            .order_by("-count", "id")[:3]
-        )
-        top_tags = [
-            {"id": t.id, "name": t.name, "weight": t.weight, "count": t.count}
-            for t in top_tags_qs
-        ]
-
-        pt_with_combos = (
-            ProductTasting.objects.filter(tasting=tasting)
-            .select_related("product")
-            .prefetch_related(
-                Prefetch("tea_flavor_combination", queryset=Product.objects.prefetch_related("logos")),
-            )
-        )
-        tea_obj_by_id: dict = {}
-        tea_to_products: dict = defaultdict(set)
-        product_obj_by_id: dict = {}
-        for pt in pt_with_combos:
-            product_obj_by_id[pt.product_id] = pt.product
-            for tea in pt.tea_flavor_combination.all():
-                tea_obj_by_id[tea.id] = tea
-                tea_to_products[tea.id].add(pt.product_id)
-
-        match_criteria_ids = set(
-            ProductTasteCriteria.objects.filter(
-                product_id__in=product_ids, for_tea_combination=True,
-            ).values_list("criteria_id", flat=True).distinct()
-        )
-        match_scores: dict = defaultdict(int)
-        if match_criteria_ids and tea_to_products:
-            match_rows = ProductCriteriaReview.objects.filter(
-                product_review__user=user,
-                product_review__product_id__in=product_ids,
-                criteria_id__in=match_criteria_ids,
-            ).values_list("product_review__product_id", "mark")
-            for pid, mark in match_rows:
-                match_scores[pid] += mark
-
-        tea_matches = []
-        for tea_id, paired_pids in tea_to_products.items():
-            scored = [(pid, match_scores[pid]) for pid in paired_pids if pid in match_scores]
-            if not scored:
+    criteria_breakdown = []
+    for criteria in sorted(criteria_obj_by_id.values(), key=lambda c: (c.order, c.id)):
+        cid = criteria.id
+        grade = criteria.grade or []
+        values: list[int] = []
+        for item in grade:
+            try:
+                values.append(int(item["value"]))
+            except (KeyError, TypeError, ValueError):
                 continue
-            scored.sort(key=lambda x: (-x[1], str(x[0])))
-            top_pid, top_score = scored[0]
-            tea = tea_obj_by_id[tea_id]
-            top_product = product_obj_by_id[top_pid]
-            tea_matches.append({
-                "tea_id": tea.id,
-                "tea_name": tea.name,
-                "tea_logo": _file_url(tea.image, request),
-                "product_id": top_product.id,
-                "product_name": top_product.name,
-                "product_number": top_product.number,
-                "match_score": top_score,
-            })
-        tea_matches.sort(key=lambda x: (x["tea_name"] or "", str(x["tea_id"])))
-
-        ice_cream_stats = _ice_cream_stats(_reviewed_product_ids(user, product_ids), request)
-
-        return Response({
-            "tasting_id": tasting.id,
-            "title": tasting.title,
-            "result_description": tasting.result_description,
-            "podium": podium,
-            "favorites": favorites,
-            "criteria_breakdown": criteria_breakdown,
-            "top_tags": top_tags,
-            "tea_matches": tea_matches,
-            "ice_cream_stats": ice_cream_stats,
+        count = criteria_product_count[cid]
+        min_total = (min(values) * count) if values else 0
+        max_total = (max(values) * count) if values else 0
+        criteria_breakdown.append({
+            "id": cid,
+            "name": criteria.name,
+            "min_total": min_total,
+            "max_total": max_total,
+            "user_total": user_totals.get(cid, 0),
         })
+
+    top_tags_qs = (
+        IceCreamTasteTags.objects.filter(
+            reviews__user=user,
+            reviews__product_id__in=product_ids,
+        )
+        .annotate(count=Count("reviews", distinct=True))
+        .order_by("-count", "id")[:3]
+    )
+    top_tags = [
+        {"id": t.id, "name": t.name, "weight": t.weight, "count": t.count}
+        for t in top_tags_qs
+    ]
+
+    pt_with_combos = (
+        ProductTasting.objects.filter(tasting=tasting)
+        .select_related("product")
+        .prefetch_related(
+            Prefetch("tea_flavor_combination", queryset=Product.objects.prefetch_related("logos")),
+        )
+    )
+    tea_obj_by_id: dict = {}
+    tea_to_products: dict = defaultdict(set)
+    product_obj_by_id: dict = {}
+    for pt in pt_with_combos:
+        product_obj_by_id[pt.product_id] = pt.product
+        for tea in pt.tea_flavor_combination.all():
+            tea_obj_by_id[tea.id] = tea
+            tea_to_products[tea.id].add(pt.product_id)
+
+    match_criteria_ids = set(
+        ProductTasteCriteria.objects.filter(
+            product_id__in=product_ids, for_tea_combination=True,
+        ).values_list("criteria_id", flat=True).distinct()
+    )
+    match_scores: dict = defaultdict(int)
+    if match_criteria_ids and tea_to_products:
+        match_rows = ProductCriteriaReview.objects.filter(
+            product_review__user=user,
+            product_review__product_id__in=product_ids,
+            criteria_id__in=match_criteria_ids,
+        ).values_list("product_review__product_id", "mark")
+        for pid, mark in match_rows:
+            match_scores[pid] += mark
+
+    tea_matches = []
+    for tea_id, paired_pids in tea_to_products.items():
+        scored = [(pid, match_scores[pid]) for pid in paired_pids if pid in match_scores]
+        if not scored:
+            continue
+        scored.sort(key=lambda x: (-x[1], str(x[0])))
+        top_pid, top_score = scored[0]
+        tea = tea_obj_by_id[tea_id]
+        top_product = product_obj_by_id[top_pid]
+        tea_matches.append({
+            "tea_id": tea.id,
+            "tea_name": tea.name,
+            "tea_logo": _file_url(tea.image, request),
+            "product_id": top_product.id,
+            "product_name": top_product.name,
+            "product_number": top_product.number,
+            "match_score": top_score,
+        })
+    tea_matches.sort(key=lambda x: (x["tea_name"] or "", str(x["tea_id"])))
+
+    ice_cream_stats = _ice_cream_stats(_reviewed_product_ids(user, product_ids), request)
+
+    return {
+        "result_id": participation.id,
+        "tasting_id": tasting.id,
+        "title": tasting.title,
+        "result_description": tasting.result_description,
+        "podium": podium,
+        "favorites": favorites,
+        "criteria_breakdown": criteria_breakdown,
+        "top_tags": top_tags,
+        "tea_matches": tea_matches,
+        "ice_cream_stats": ice_cream_stats,
+    }
 
 
 def _review_total_score(review: ProductReview | None) -> int | None:

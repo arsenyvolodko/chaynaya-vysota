@@ -516,6 +516,7 @@ class IceCreamStatsField(serializers.DictField):
 
 
 class TastingResultSerializer(serializers.Serializer):
+    result_id = serializers.UUIDField()
     tasting_id = serializers.UUIDField()
     title = serializers.CharField()
     result_description = serializers.CharField(allow_null=True)
