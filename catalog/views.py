@@ -558,7 +558,7 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
             tea_matches.append({
                 "tea_id": tea.id,
                 "tea_name": tea.name,
-                "tea_logo": _logo_url(tea, request),
+                "tea_logo": _file_url(tea.image, request),
                 "product_id": top_product.id,
                 "product_name": top_product.name,
                 "product_number": top_product.number,
@@ -646,8 +646,7 @@ def _file_url(file_field, request) -> str | None:
 
 
 def _logo_url(product: Product, request) -> str | None:
-    logo = next(iter(product.logos.all()), None)
-    if logo is None or not logo.image:
+    if not product.image:
         return None
-    url = logo.image.url
+    url = product.image.url
     return request.build_absolute_uri(url) if request is not None else url

@@ -209,17 +209,31 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_is_reviewed(self, obj: Product) -> bool:
         review = self._user_review(obj)
-        if review is None:
+        if review is not None:
+            if review.global_comment or review.self_comment:
+                return True
+            if review.composition:
+                return True
+            if list(review.criteria_reviews.all()):
+                return True
+            if list(review.taste_tags.all()):
+                return True
+        return self._has_nominated_mark(obj)
+
+    def _has_nominated_mark(self, obj: Product) -> bool:
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
             return False
-        if review.global_comment or review.self_comment:
-            return True
-        if review.composition:
-            return True
-        if list(review.criteria_reviews.all()):
-            return True
-        if list(review.taste_tags.all()):
-            return True
-        return False
+        pt_rows = obj.__dict__.get("_pt_for_marks")
+        if pt_rows is not None:
+            for pt in pt_rows:
+                for mark in getattr(pt, "_user_marks_list", []):
+                    if mark.is_nominated:
+                        return True
+            return False
+        return ProductTastingUserMark.objects.filter(
+            user=request.user, product_tasting__product=obj, is_nominated=True,
+        ).exists()
 
     def get_self_comment(self, obj: Product) -> str | None:
         review = self._user_review(obj)
