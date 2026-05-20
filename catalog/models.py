@@ -117,7 +117,7 @@ class Product(models.Model):
     number = models.IntegerField(null=True, blank=True, default=None)
     line = models.ForeignKey(Line, on_delete=models.SET_NULL, null=True, blank=True, default=None)
     interesting_fact = models.TextField(blank=True, null=True)
-    composition = models.JSONField(blank=True, default=list)
+    composition = models.JSONField(blank=True, null=True, default=list)
     logos = models.ManyToManyField(IceCreamLogo, related_name="products", blank=True, through="ProductIceCreamLogo")
 
     def __str__(self) -> str:
