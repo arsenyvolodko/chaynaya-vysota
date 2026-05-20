@@ -42,7 +42,11 @@ _TASTE_CRITERIA_ITEM_SCHEMA = {
         "orientation": {
             "type": "string",
             "enum": ["horizontal", "vertical"],
-            "description": "Ориентация отрисовки шкалы критерия.",
+            "nullable": True,
+            "description": (
+                "Ориентация отрисовки шкалы критерия. null, когда критерий привязан к CircleChart "
+                "(там ориентация задаётся самим чартом). DB-инвариант: одновременно chart и orientation не задаются."
+            ),
         },
         "for_tea_combination": {
             "type": "boolean",

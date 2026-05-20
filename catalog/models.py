@@ -59,11 +59,22 @@ class TasteCriteria(models.Model):
     grade = models.JSONField(blank=True, default=list)
     description = models.TextField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
-    orientation = models.CharField(choices=OrientationEnum.choices, default=OrientationEnum.HORIZONTAL)  # noqa
+    orientation = models.CharField(  # noqa
+        choices=OrientationEnum.choices,
+        null=True,
+        blank=True,
+        default=None,
+    )
     chart = models.ForeignKey(CircleChart, on_delete=models.SET_NULL, null=True, blank=True, default=None)
 
     class Meta:
         ordering = ["order", "id"]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(chart__isnull=False, orientation__isnull=False),
+                name="tastecriteria_chart_or_orientation_not_both",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name
