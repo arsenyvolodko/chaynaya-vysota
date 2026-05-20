@@ -49,6 +49,10 @@ class IceCreamLogo(models.Model):
 class CircleChart(models.Model):
     name = models.CharField(max_length=127)
     description = models.TextField(blank=True, null=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
 
     def __str__(self) -> str:
         return self.name

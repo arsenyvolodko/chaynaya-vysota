@@ -386,7 +386,7 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_charts(self, obj: Product) -> list[dict]:
         marks = self._criteria_marks(obj)
         charts_by_id: dict[int, dict] = {}
-        order: list[int] = []
+        chart_sort_key: dict[int, tuple[int, int]] = {}
         for row in self._criteria_rows(obj):
             chart = row.criteria.chart
             if chart is None:
@@ -400,9 +400,9 @@ class ProductSerializer(serializers.ModelSerializer):
                     "criterias": [],
                 }
                 charts_by_id[chart.id] = bucket
-                order.append(chart.id)
+                chart_sort_key[chart.id] = (chart.order, chart.id)
             bucket["criterias"].append(self._criteria_item(row, marks))
-        return [charts_by_id[cid] for cid in order]
+        return [charts_by_id[cid] for cid in sorted(charts_by_id, key=chart_sort_key.get)]
 
 
 class ProductReviewWriteSerializer(serializers.Serializer):

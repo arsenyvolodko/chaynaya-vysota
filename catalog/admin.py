@@ -50,9 +50,10 @@ class IceCreamLogoAdmin(admin.ModelAdmin):
 
 @admin.register(CircleChart)
 class CircleChartAdmin(admin.ModelAdmin):
-    list_display = ("id", "name")
+    list_display = ("id", "order", "name")
+    list_editable = ("order",)
     search_fields = ("name", "id")
-    ordering = ("name",)
+    ordering = ("order", "id")
 
 
 @admin.register(TasteCriteria)
