@@ -101,6 +101,19 @@ class ProductAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {"fields": ("type", "number", "name", "line")}),
         ("Контент", {"fields": ("description", "interesting_fact", "composition", "image", "thumb", "color")}),
+        (
+            "Чай",
+            {
+                "classes": ("collapse",),
+                "fields": (
+                    "tea_nickname",
+                    "tea_sort",
+                    "tea_index",
+                    "tea_price_per_gram",
+                    "tea_plucking_season",
+                ),
+            },
+        ),
         ("Результат", {"fields": ("result_phrase",)}),
         ("Теги", {"fields": ("taste_tags",)}),
     )
