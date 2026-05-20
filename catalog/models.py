@@ -10,6 +10,11 @@ class ProductTypeEnum(models.TextChoices):
     TEA = "tea", "Чай"
 
 
+class OrientationEnum(models.TextChoices):
+    HORIZONTAL = "horizontal", "Горизонтальная"
+    VERTICAL = "vertical", "Вертикальная"
+
+
 class Line(models.Model):
     name = models.CharField(max_length=127)
 
@@ -17,7 +22,7 @@ class Line(models.Model):
         return self.name
 
 
-class IceCreamTasteTags(models.Model):
+class TasteTags(models.Model):
     name = models.CharField(max_length=127)
     weight = models.FloatField(
         default=0.0,
@@ -41,11 +46,21 @@ class IceCreamLogo(models.Model):
         return self.intro_name or f"Логотип #{self.pk}"
 
 
+class CircleChart(models.Model):
+    name = models.CharField(max_length=127)
+    description = models.TextField(blank=True, null=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class TasteCriteria(models.Model):
     name = models.CharField(max_length=127)
     grade = models.JSONField(blank=True, default=list)
     description = models.TextField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
+    orientation = models.CharField(choices=OrientationEnum.choices, default=OrientationEnum.HORIZONTAL)  # noqa
+    chart = models.ForeignKey(CircleChart, on_delete=models.SET_NULL, null=True, blank=True, default=None)
 
     class Meta:
         ordering = ["order", "id"]
@@ -55,31 +70,44 @@ class TasteCriteria(models.Model):
 
 
 class Product(models.Model):
+    # common
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     type = models.CharField(max_length=20, choices=ProductTypeEnum.choices)  # noqa
     name = models.CharField(max_length=200)
-    number = models.IntegerField(null=True, blank=True, default=None)
-    line = models.ForeignKey(Line, on_delete=models.SET_NULL, null=True, blank=True, default=None)
     description = models.TextField(blank=True, null=True)
-    interesting_fact = models.TextField(blank=True, null=True)
-    composition = models.JSONField(blank=True, default=list)
     image = models.FileField(
         upload_to="products/",
         blank=True,
         null=True,
         validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "svg"])],
     )
+    result_phrase = models.TextField(blank=True, null=True)
+    color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
+
+    taste_criteria = models.ManyToManyField(
+        TasteCriteria, related_name="products", blank=True, through="ProductTasteCriteria"
+    )
+    taste_tags = models.ManyToManyField(TasteTags, related_name="products", blank=True)
     tasters = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         through="ProductReview",
         related_name="tasted_products",
         blank=True,
     )
+
+    # tea
+    tea_nickname = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_sort = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_index = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_price_per_gram = models.FloatField(null=True, blank=True, default=None)
+    tea_plucking_season = models.CharField(max_length=127, null=True, blank=True, default=None)
+
+    # ice cream
+    number = models.IntegerField(null=True, blank=True, default=None)
+    line = models.ForeignKey(Line, on_delete=models.SET_NULL, null=True, blank=True, default=None)
+    interesting_fact = models.TextField(blank=True, null=True)
+    composition = models.JSONField(blank=True, default=list)
     logos = models.ManyToManyField(IceCreamLogo, related_name="products", blank=True, through="ProductIceCreamLogo")
-    taste_criteria = models.ManyToManyField(TasteCriteria, related_name="products", blank=True, through="ProductTasteCriteria")
-    taste_tags = models.ManyToManyField(IceCreamTasteTags, related_name="products", blank=True)
-    result_phrase = models.TextField(blank=True, null=True)
-    color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
 
     def __str__(self) -> str:
         return f"{self.get_type_display()} — {self.name}"
@@ -109,6 +137,10 @@ class Tasting(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True, null=True)
     result_description = models.TextField(blank=True, null=True)
+    type = models.CharField(
+        choices=ProductTypeEnum.choices,  # noqa
+        default=ProductTypeEnum.ICE_CREAM,
+    )
     date = models.DateTimeField()
     products = models.ManyToManyField(Product, through="ProductTasting", related_name="tastings", blank=True)
     participants = models.ManyToManyField(
@@ -181,7 +213,7 @@ class ProductReview(models.Model):
         related_name="reviews",
         blank=True,
     )
-    taste_tags = models.ManyToManyField(IceCreamTasteTags, related_name="reviews", blank=True)
+    taste_tags = models.ManyToManyField(TasteTags, related_name="reviews", blank=True)
 
     class Meta:
         constraints = [

@@ -15,7 +15,7 @@ from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
 
 from .models import (
     Config,
-    IceCreamTasteTags,
+    TasteTags,
     Product,
     ProductCriteriaReview,
     ProductIceCreamLogo,
@@ -69,7 +69,7 @@ _PRODUCT_PREFETCH = (
     "taste_tags",
     Prefetch(
         "producttastecriteria_set",
-        queryset=ProductTasteCriteria.objects.select_related("criteria").order_by("order", "id"),
+        queryset=ProductTasteCriteria.objects.select_related("criteria", "criteria__chart").order_by("order", "id"),
         to_attr="_taste_criteria_rows",
     ),
 )
@@ -223,7 +223,7 @@ class ProductViewSet(ReadOnlyModelViewSet):
         return [(linked[cid], mark) for cid, mark in wanted_ids.items()]
 
     @staticmethod
-    def _resolve_taste_tags(product: Product, tag_ids: list[int]) -> list[IceCreamTasteTags]:
+    def _resolve_taste_tags(product: Product, tag_ids: list[int]) -> list[TasteTags]:
         wanted = set(tag_ids)
         linked = list(product.taste_tags.filter(pk__in=wanted))
         missing = sorted(wanted - {t.pk for t in linked})
@@ -535,7 +535,7 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         })
 
     top_tags_qs = (
-        IceCreamTasteTags.objects.filter(
+        TasteTags.objects.filter(
             reviews__user=user,
             reviews__product_id__in=product_ids,
         )
@@ -604,6 +604,7 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         "result_id": participation.id,
         "tasting_id": tasting.id,
         "title": tasting.title,
+        "type": tasting.type,
         "result_description": tasting.result_description,
         "podium": podium,
         "favorites": favorites,

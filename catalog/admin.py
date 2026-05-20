@@ -2,9 +2,10 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from .models import (
+    CircleChart,
     Config,
     IceCreamLogo,
-    IceCreamTasteTags,
+    TasteTags,
     Line,
     Product,
     ProductCriteriaReview,
@@ -26,7 +27,7 @@ class LineAdmin(admin.ModelAdmin):
     ordering = ("name",)
 
 
-@admin.register(IceCreamTasteTags)
+@admin.register(TasteTags)
 class IceCreamTasteTagsAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "weight")
     list_editable = ("weight",)
@@ -47,11 +48,20 @@ class IceCreamLogoAdmin(admin.ModelAdmin):
         return format_html('<img src="{}" style="height:40px;border-radius:4px"/>', obj.image.url)
 
 
+@admin.register(CircleChart)
+class CircleChartAdmin(admin.ModelAdmin):
+    list_display = ("id", "name")
+    search_fields = ("name", "id")
+    ordering = ("name",)
+
+
 @admin.register(TasteCriteria)
 class TasteCriteriaAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "name", "grade")
-    list_editable = ("order",)
+    list_display = ("id", "order", "name", "orientation", "chart", "grade")
+    list_editable = ("order", "orientation", "chart")
+    list_filter = ("orientation", "chart")
     search_fields = ("name", "id")
+    autocomplete_fields = ("chart",)
     ordering = ("order", "id")
 
 
@@ -138,8 +148,8 @@ class TastingUserMarksInline(admin.TabularInline):
 
 @admin.register(Tasting)
 class TastingAdmin(admin.ModelAdmin):
-    list_display = ("title", "date", "products_count", "participants_count")
-    list_filter = ("date",)
+    list_display = ("title", "type", "date", "products_count", "participants_count")
+    list_filter = ("type", "date")
     search_fields = ("title", "id")
     date_hierarchy = "date"
     inlines = [ProductTastingInline, TastingParticipationInline, TastingUserMarksInline]
