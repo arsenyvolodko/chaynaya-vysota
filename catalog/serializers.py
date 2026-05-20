@@ -517,9 +517,18 @@ class TastingResultFavoriteItemSerializer(serializers.Serializer):
 class TastingResultCriteriaItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
+    description = serializers.CharField(allow_null=True)
+    orientation = serializers.CharField(allow_null=True)
     min_total = serializers.IntegerField()
     max_total = serializers.IntegerField()
     user_total = serializers.IntegerField()
+
+
+class TastingResultChartSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    description = serializers.CharField(allow_null=True)
+    criterias = TastingResultCriteriaItemSerializer(many=True)
 
 
 class TastingResultTopTagItemSerializer(serializers.Serializer):
@@ -603,6 +612,7 @@ class TastingResultSerializer(serializers.Serializer):
     podium = TastingResultPodiumItemSerializer(many=True)
     favorites = TastingResultFavoriteItemSerializer(many=True)
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
+    charts = TastingResultChartSerializer(many=True)
     top_tags = TastingResultTopTagItemSerializer(many=True)
     tea_matches = TastingResultTeaMatchSerializer(many=True)
     ice_cream_stats = IceCreamStatsField()

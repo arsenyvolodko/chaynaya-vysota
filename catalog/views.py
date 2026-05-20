@@ -495,7 +495,7 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
 
     ptc_rows = (
         ProductTasteCriteria.objects.filter(product_id__in=product_ids)
-        .select_related("criteria")
+        .select_related("criteria", "criteria__chart")
     )
     criteria_obj_by_id: dict[int, TasteCriteria] = {}
     criteria_product_count: dict[int, int] = defaultdict(int)
@@ -513,7 +513,9 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         for cid, mark in user_mark_rows:
             user_totals[cid] += mark
 
-    criteria_breakdown = []
+    criteria_breakdown: list[dict] = []
+    charts_by_id: dict[int, dict] = {}
+    chart_objects: dict = {}
     for criteria in sorted(criteria_obj_by_id.values(), key=lambda c: (c.order, c.id)):
         cid = criteria.id
         grade = criteria.grade or []
@@ -526,13 +528,35 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         count = criteria_product_count[cid]
         min_total = (min(values) * count) if values else 0
         max_total = (max(values) * count) if values else 0
-        criteria_breakdown.append({
+        item_dict = {
             "id": cid,
             "name": criteria.name,
+            "description": criteria.description,
+            "orientation": criteria.orientation,
             "min_total": min_total,
             "max_total": max_total,
             "user_total": user_totals.get(cid, 0),
-        })
+        }
+        if criteria.chart_id is None:
+            criteria_breakdown.append(item_dict)
+        else:
+            bucket = charts_by_id.get(criteria.chart_id)
+            if bucket is None:
+                chart = criteria.chart
+                bucket = {
+                    "id": chart.id,
+                    "name": chart.name,
+                    "description": chart.description,
+                    "criterias": [],
+                }
+                charts_by_id[chart.id] = bucket
+                chart_objects[chart.id] = chart
+            bucket["criterias"].append(item_dict)
+
+    charts_breakdown = [
+        charts_by_id[cid]
+        for cid in sorted(charts_by_id, key=lambda c: (chart_objects[c].order, chart_objects[c].id))
+    ]
 
     top_tags_qs = (
         TasteTags.objects.filter(
@@ -609,6 +633,7 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         "podium": podium,
         "favorites": favorites,
         "criteria_breakdown": criteria_breakdown,
+        "charts": charts_breakdown,
         "top_tags": top_tags,
         "tea_matches": tea_matches,
         "ice_cream_stats": ice_cream_stats,
