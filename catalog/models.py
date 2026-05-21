@@ -15,6 +15,11 @@ class OrientationEnum(models.TextChoices):
     VERTICAL = "vertical", "Вертикальная"
 
 
+class CircleChartLabelPlacementEnum(models.TextChoices):
+    VERTICES = "vertices", "на вершинах"
+    EDGES = "edges", "на рёбрах"
+
+
 class Line(models.Model):
     name = models.CharField(max_length=127)
 
@@ -51,6 +56,7 @@ class CircleChart(models.Model):
     description = models.TextField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
     color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
+    label_placement = models.CharField(choices=CircleChartLabelPlacementEnum.choices, default=CircleChartLabelPlacementEnum.EDGES)  # noqa
 
     class Meta:
         ordering = ["order", "id"]
@@ -115,7 +121,9 @@ class Product(models.Model):
     tea_nickname = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_sort = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_index = models.CharField(max_length=127, null=True, blank=True, default=None)
-    tea_price_per_gram = models.FloatField(null=True, blank=True, default=None)
+    tea_price = models.FloatField(null=True, blank=True, default=None)
+    tea_measure_unit = models.CharField(max_length=127, null=True, blank=True, default="грамм")
+    tea_geography = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_plucking_season = models.CharField(max_length=127, null=True, blank=True, default=None)
 
     # ice cream

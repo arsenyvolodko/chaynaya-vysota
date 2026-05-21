@@ -83,9 +83,15 @@ CHARTS_SCHEMA = {
             "id": {"type": "integer"},
             "name": {"type": "string"},
             "description": {"type": "string", "nullable": True},
+            "color": {"type": "string", "nullable": True, "description": "Hex-цвет (#rrggbb) для UI."},
+            "label_placement": {
+                "type": "string",
+                "enum": ["vertices", "edges"],
+                "description": "Где рендерить подписи критериев чарта: на вершинах многоугольника или на рёбрах.",
+            },
             "criterias": {"type": "array", "items": _TASTE_CRITERIA_ITEM_SCHEMA},
         },
-        "required": ["id", "name", "description", "criterias"],
+        "required": ["id", "name", "description", "color", "label_placement", "criterias"],
     },
 }
 
@@ -218,7 +224,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "tea_nickname",
             "tea_sort",
             "tea_index",
-            "tea_price_per_gram",
+            "tea_price",
+            "tea_measure_unit",
+            "tea_geography",
             "tea_plucking_season",
         ]
 
@@ -397,6 +405,8 @@ class ProductSerializer(serializers.ModelSerializer):
                     "id": chart.id,
                     "name": chart.name,
                     "description": chart.description,
+                    "color": chart.color,
+                    "label_placement": chart.label_placement,
                     "criterias": [],
                 }
                 charts_by_id[chart.id] = bucket
@@ -528,6 +538,8 @@ class TastingResultChartSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField(allow_null=True)
+    color = serializers.CharField(allow_null=True)
+    label_placement = serializers.CharField()
     criterias = TastingResultCriteriaItemSerializer(many=True)
 
 

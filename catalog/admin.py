@@ -50,8 +50,9 @@ class IceCreamLogoAdmin(admin.ModelAdmin):
 
 @admin.register(CircleChart)
 class CircleChartAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "name")
-    list_editable = ("order",)
+    list_display = ("id", "order", "name", "label_placement", "color")
+    list_editable = ("order", "label_placement", "color")
+    list_filter = ("label_placement",)
     search_fields = ("name", "id")
     ordering = ("order", "id")
 
@@ -110,7 +111,9 @@ class ProductAdmin(admin.ModelAdmin):
                     "tea_nickname",
                     "tea_sort",
                     "tea_index",
-                    "tea_price_per_gram",
+                    "tea_price",
+                    "tea_measure_unit",
+                    "tea_geography",
                     "tea_plucking_season",
                 ),
             },

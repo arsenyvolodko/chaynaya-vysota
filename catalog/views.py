@@ -547,6 +547,8 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
                     "id": chart.id,
                     "name": chart.name,
                     "description": chart.description,
+                    "color": chart.color,
+                    "label_placement": chart.label_placement,
                     "criterias": [],
                 }
                 charts_by_id[chart.id] = bucket
