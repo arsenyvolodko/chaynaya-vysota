@@ -50,6 +50,7 @@ class CircleChart(models.Model):
     name = models.CharField(max_length=127)
     description = models.TextField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
+    color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
 
     class Meta:
         ordering = ["order", "id"]
