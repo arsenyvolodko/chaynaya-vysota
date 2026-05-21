@@ -125,6 +125,7 @@ class Product(models.Model):
     tea_measure_unit = models.CharField(max_length=127, null=True, blank=True, default="грамм")
     tea_geography = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_plucking_season = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_rubrucator = models.CharField(max_length=127, null=True, blank=True, default=None)
 
     # ice cream
     number = models.IntegerField(null=True, blank=True, default=None)

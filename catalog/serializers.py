@@ -228,6 +228,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "tea_measure_unit",
             "tea_geography",
             "tea_plucking_season",
+            "tea_rubrucator",
         ]
 
     def _user_review(self, obj: Product):

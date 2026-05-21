@@ -115,6 +115,7 @@ class ProductAdmin(admin.ModelAdmin):
                     "tea_measure_unit",
                     "tea_geography",
                     "tea_plucking_season",
+                    "tea_rubrucator",
                 ),
             },
         ),
