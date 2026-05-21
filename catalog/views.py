@@ -69,7 +69,9 @@ _PRODUCT_PREFETCH = (
     "taste_tags",
     Prefetch(
         "producttastecriteria_set",
-        queryset=ProductTasteCriteria.objects.select_related("criteria", "criteria__chart").order_by("order", "id"),
+        queryset=ProductTasteCriteria.objects.select_related("criteria", "criteria__chart").order_by(
+            "order", "criteria__order", "criteria_id"
+        ),
         to_attr="_taste_criteria_rows",
     ),
 )

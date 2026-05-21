@@ -360,7 +360,7 @@ class ProductSerializer(serializers.ModelSerializer):
             rows = list(
                 obj.producttastecriteria_set
                 .select_related("criteria", "criteria__chart")
-                .order_by("order", "id")
+                .order_by("order", "criteria__order", "criteria_id")
             )
         return rows
 
