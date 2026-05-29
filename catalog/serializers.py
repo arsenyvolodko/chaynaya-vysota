@@ -4,13 +4,11 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import (
+    ChartTypeEnum,
     Config,
     IceCreamLogo,
     TasteTags,
     Product,
-    ProductReview,
-    ProductTastingUserMark,
-    TasteCriteria,
     Tasting,
     TastingParticipation,
 )
@@ -60,22 +58,60 @@ _TASTE_CRITERIA_ITEM_SCHEMA = {
         },
     },
     "required": [
-        "id", "name", "description", "grade", "orientation",
-        "for_tea_combination", "user_grade_review",
+        "id",
+        "name",
+        "description",
+        "grade",
+        "orientation",
+        "for_tea_combination",
+        "user_grade_review",
     ],
+}
+
+_TASTE_BLOCK_PROP = {
+    "type": "integer",
+    "nullable": True,
+    "description": (
+        "id TasteBlock — раздел карточки, к которому относится элемент. Есть только у автономных "
+        "критериев и у чартов/плотов; у критериев внутри chart/plot не отдаётся (блок берётся у самого "
+        "chart/plot). null, если элемент не отнесён к блоку."
+    ),
+}
+
+_STANDALONE_TASTE_CRITERIA_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {**_TASTE_CRITERIA_ITEM_SCHEMA["properties"], "taste_block": _TASTE_BLOCK_PROP},
+    "required": _TASTE_CRITERIA_ITEM_SCHEMA["required"] + ["taste_block"],
 }
 
 TASTE_CRITERIA_SCHEMA = {
     "type": "array",
-    "description": "Критерии оценки, НЕ привязанные к CircleChart. Критерии с привязкой к чарту — в поле `charts`.",
-    "items": _TASTE_CRITERIA_ITEM_SCHEMA,
+    "description": "Автономные критерии оценки, НЕ привязанные к Chart. Критерии чартов — в `charts`/`plots`.",
+    "items": _STANDALONE_TASTE_CRITERIA_ITEM_SCHEMA,
+}
+
+TASTE_BLOCKS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Разделы карточки блюда в порядке для текущей дегустации (TastingTasteBlock.order). "
+        "Фронт рендерит секции по этому списку, раскладывая чарты/плоты/критерии по их taste_block."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string"},
+        },
+        "required": ["id", "name"],
+    },
 }
 
 CHARTS_SCHEMA = {
     "type": "array",
     "description": (
-        "Группы критериев, объединённых одним CircleChart. Появляются здесь, "
-        "если у TasteCriteria.chart задано значение. Те же критерии в `taste_criteria` не дублируются."
+        "Группы критериев, объединённых одним Chart типа `circle`. Появляются здесь, если у "
+        "TasteCriteria.chart задан круговой чарт. Plot-чарты — в поле `plots`. Те же критерии в "
+        "`taste_criteria` не дублируются."
     ),
     "items": {
         "type": "object",
@@ -89,9 +125,76 @@ CHARTS_SCHEMA = {
                 "enum": ["vertices", "edges"],
                 "description": "Где рендерить подписи критериев чарта: на вершинах многоугольника или на рёбрах.",
             },
+            "taste_block": _TASTE_BLOCK_PROP,
             "criterias": {"type": "array", "items": _TASTE_CRITERIA_ITEM_SCHEMA},
         },
-        "required": ["id", "name", "description", "color", "label_placement", "criterias"],
+        "required": ["id", "name", "description", "color", "label_placement", "taste_block", "criterias"],
+    },
+}
+
+_PLOT_POINT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "x": {"type": "integer", "description": "Деление на оси X чарта (из Chart.x_axis)."},
+        "mark": {"type": "integer", "description": "Значение по оси Y (из Chart.y_axis) — Y-координата точки."},
+    },
+    "required": ["x", "mark"],
+}
+
+_PLOT_CRITERIA_ITEM_SCHEMA = {
+    "type": "object",
+    "description": "Критерий внутри Plot-чарта — отдельная серия (линия). Y-шкала общая на весь чарт (Chart.y_axis).",
+    "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "description": {"type": "string", "nullable": True},
+        "for_tea_combination": {
+            "type": "boolean",
+            "description": "Признак с through-модели ProductTasteCriteria: критерий про сочетание с чаем.",
+        },
+        "user_grade_review": {
+            "type": "array",
+            "items": _PLOT_POINT_SCHEMA,
+            "description": "Точки текущего пользователя по этой серии: по одной на каждое выставленное "
+            "деление X. Пустой список, если пользователь ничего не отмечал.",
+        },
+    },
+    "required": ["id", "name", "description", "for_tea_combination", "user_grade_review"],
+}
+
+PLOTS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Группы критериев, объединённых одним Chart типа `plot`. Каждый критерий — серия по оси Y; "
+        "ось X (Chart.x_axis) общая. Оценка двухкоординатная: в каждой точке (x, mark). Критерии "
+        "Plot-чартов не попадают в `taste_criteria`/`charts`."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string"},
+            "description": {"type": "string", "nullable": True},
+            "color": {"type": "string", "nullable": True, "description": "Hex-цвет (#rrggbb) для UI."},
+            "x_axis": GRADE_SCHEMA,
+            "y_axis": GRADE_SCHEMA,
+            "x_axis_name": {"type": "string", "nullable": True, "description": "Заголовок оси X."},
+            "y_axis_name": {"type": "string", "nullable": True, "description": "Заголовок оси Y."},
+            "taste_block": _TASTE_BLOCK_PROP,
+            "criterias": {"type": "array", "items": _PLOT_CRITERIA_ITEM_SCHEMA},
+        },
+        "required": [
+            "id",
+            "name",
+            "description",
+            "color",
+            "x_axis",
+            "y_axis",
+            "x_axis_name",
+            "y_axis_name",
+            "taste_block",
+            "criterias",
+        ],
     },
 }
 
@@ -178,22 +281,12 @@ class IceCreamLogoSerializer(serializers.ModelSerializer):
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    """Чисто информационная карточка продукта. Без оценочной части — критерии/чарты/оценки
+    живут на уровне дегустации и отдаются в ProductInTastingSerializer."""
+
     line = serializers.SerializerMethodField()
     logos = IceCreamLogoSerializer(many=True, read_only=True)
-    taste_criteria = serializers.SerializerMethodField()
-    charts = serializers.SerializerMethodField()
     composition = serializers.ListField(child=serializers.CharField(), read_only=True)
-
-    taste_tags = serializers.SerializerMethodField()
-
-    tasted = serializers.SerializerMethodField()
-    is_bookmarked = serializers.SerializerMethodField()
-    is_reviewed = serializers.SerializerMethodField()
-    self_comment = serializers.SerializerMethodField()
-    global_comment = serializers.SerializerMethodField()
-    user_composition = serializers.SerializerMethodField()
-    total_score = serializers.SerializerMethodField()
-    tasting_marks = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -208,19 +301,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "composition",
             "image",
             "logos",
-            "taste_criteria",
-            "charts",
-            "taste_tags",
-            "tasted",
-            "is_bookmarked",
-            "is_reviewed",
             "color",
             "result_phrase",
-            "self_comment",
-            "global_comment",
-            "user_composition",
-            "total_score",
-            "tasting_marks",
             "tea_nickname",
             "tea_sort",
             "tea_index",
@@ -231,189 +313,14 @@ class ProductSerializer(serializers.ModelSerializer):
             "tea_rubrucator",
         ]
 
-    def _user_review(self, obj: Product):
-        cached = obj.__dict__.get("_cached_user_review", "MISSING")
-        if cached != "MISSING":
-            return cached
-
-        request = self.context.get("request")
-        if not request or not request.user or not request.user.is_authenticated:
-            review = None
-        else:
-            prefetched = getattr(obj, "_user_reviews", None)
-            if prefetched is not None:
-                review = prefetched[0] if prefetched else None
-            else:
-                review = ProductReview.objects.filter(user=request.user, product=obj).first()
-
-        obj.__dict__["_cached_user_review"] = review
-        return review
-
-    def get_tasted(self, obj: Product) -> bool:
-        review = self._user_review(obj)
-        return bool(review and review.tasted)
-
-    def get_is_bookmarked(self, obj: Product) -> bool:
-        review = self._user_review(obj)
-        return bool(review and review.is_bookmarked)
-
-    def get_is_reviewed(self, obj: Product) -> bool:
-        review = self._user_review(obj)
-        if review is not None:
-            if review.global_comment or review.self_comment:
-                return True
-            if review.composition:
-                return True
-            if list(review.criteria_reviews.all()):
-                return True
-            if list(review.taste_tags.all()):
-                return True
-        return self._has_nominated_mark(obj)
-
-    def _has_nominated_mark(self, obj: Product) -> bool:
-        request = self.context.get("request")
-        if not request or not request.user or not request.user.is_authenticated:
-            return False
-        pt_rows = obj.__dict__.get("_pt_for_marks")
-        if pt_rows is not None:
-            for pt in pt_rows:
-                for mark in getattr(pt, "_user_marks_list", []):
-                    if mark.is_nominated:
-                        return True
-            return False
-        return ProductTastingUserMark.objects.filter(
-            user=request.user, product_tasting__product=obj, is_nominated=True,
-        ).exists()
-
-    def get_self_comment(self, obj: Product) -> str | None:
-        review = self._user_review(obj)
-        return review.self_comment if review else None
-
-    def get_global_comment(self, obj: Product) -> str | None:
-        review = self._user_review(obj)
-        return review.global_comment if review else None
-
-    @extend_schema_field(USER_COMPOSITION_SCHEMA)
-    def get_user_composition(self, obj: Product):
-        review = self._user_review(obj)
-        return review.composition if review else None
-
     def get_line(self, obj: Product) -> str | None:
         return obj.line.name if obj.line else None
 
-    @extend_schema_field(TASTE_TAGS_SCHEMA)
-    def get_taste_tags(self, obj: Product) -> list[dict]:
-        review = self._user_review(obj)
-        marked_ids: set[int] = set()
-        if review:
-            marked_ids = {t.pk for t in review.taste_tags.all()}
-        return [
-            {"id": t.pk, "name": t.name, "weight": t.weight, "marked": t.pk in marked_ids}
-            for t in obj.taste_tags.all()
-        ]
 
-    @extend_schema_field(TOTAL_SCORE_SCHEMA)
-    def get_total_score(self, obj: Product) -> int | None:
-        review = self._user_review(obj)
-        if not review:
-            return None
-        marks_sum = sum(cr.mark for cr in review.criteria_reviews.all())
-        weights_sum = sum(t.weight for t in review.taste_tags.all())
-        total = Decimal(str(marks_sum + weights_sum))
-        return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-    @extend_schema_field(TASTING_MARKS_SCHEMA)
-    def get_tasting_marks(self, obj: Product) -> list[dict]:
-        request = self.context.get("request")
-        if not request or not request.user or not request.user.is_authenticated:
-            return []
-
-        pt_rows = obj.__dict__.get("_pt_for_marks")
-        if pt_rows is not None:
-            results = []
-            for pt in pt_rows:
-                for mark in getattr(pt, "_user_marks_list", []):
-                    results.append({
-                        "tasting_id": mark.tasting_id,
-                        "tasting_title": pt.tasting.title,
-                        "is_nominated": mark.is_nominated,
-                        "podium_place": mark.podium_place,
-                    })
-            return results
-
-        marks = ProductTastingUserMark.objects.filter(
-            user=request.user, product_tasting__product=obj,
-        ).select_related("tasting")
-        return [
-            {
-                "tasting_id": m.tasting_id,
-                "tasting_title": m.tasting.title,
-                "is_nominated": m.is_nominated,
-                "podium_place": m.podium_place,
-            }
-            for m in marks
-        ]
-
-    def _criteria_rows(self, obj: Product):
-        rows = obj.__dict__.get("_taste_criteria_rows")
-        if rows is None:
-            rows = list(
-                obj.producttastecriteria_set
-                .select_related("criteria", "criteria__chart")
-                .order_by("order", "criteria__order", "criteria_id")
-            )
-        return rows
-
-    def _criteria_marks(self, obj: Product) -> dict[int, int]:
-        review = self._user_review(obj)
-        if not review:
-            return {}
-        return {cr.criteria_id: cr.mark for cr in review.criteria_reviews.all()}
-
-    @staticmethod
-    def _criteria_item(row, marks: dict[int, int]) -> dict:
-        return {
-            "id": row.criteria_id,
-            "name": row.criteria.name,
-            "description": row.criteria.description,
-            "grade": row.criteria.grade,
-            "orientation": row.criteria.orientation,
-            "for_tea_combination": row.for_tea_combination,
-            "user_grade_review": marks.get(row.criteria_id),
-        }
-
-    @extend_schema_field(TASTE_CRITERIA_SCHEMA)
-    def get_taste_criteria(self, obj: Product) -> list[dict]:
-        marks = self._criteria_marks(obj)
-        return [
-            self._criteria_item(row, marks)
-            for row in self._criteria_rows(obj)
-            if row.criteria.chart_id is None
-        ]
-
-    @extend_schema_field(CHARTS_SCHEMA)
-    def get_charts(self, obj: Product) -> list[dict]:
-        marks = self._criteria_marks(obj)
-        charts_by_id: dict[int, dict] = {}
-        chart_sort_key: dict[int, tuple[int, int]] = {}
-        for row in self._criteria_rows(obj):
-            chart = row.criteria.chart
-            if chart is None:
-                continue
-            bucket = charts_by_id.get(chart.id)
-            if bucket is None:
-                bucket = {
-                    "id": chart.id,
-                    "name": chart.name,
-                    "description": chart.description,
-                    "color": chart.color,
-                    "label_placement": chart.label_placement,
-                    "criterias": [],
-                }
-                charts_by_id[chart.id] = bucket
-                chart_sort_key[chart.id] = (chart.order, chart.id)
-            bucket["criterias"].append(self._criteria_item(row, marks))
-        return [charts_by_id[cid] for cid in sorted(charts_by_id, key=chart_sort_key.get)]
+class PlotMarkSerializer(serializers.Serializer):
+    criteria = serializers.IntegerField(help_text="id TasteCriteria, привязанного к Plot-чарту.")
+    x = serializers.IntegerField(help_text="Деление оси X чарта (значение из Chart.x_axis).")
+    mark = serializers.IntegerField(help_text="Значение оси Y (из Chart.y_axis) — Y-координата точки.")
 
 
 class ProductReviewWriteSerializer(serializers.Serializer):
@@ -427,7 +334,14 @@ class ProductReviewWriteSerializer(serializers.Serializer):
     criteria_marks = serializers.DictField(
         child=serializers.IntegerField(),
         required=False,
-        help_text="Оценки по критериям: ключ — id TasteCriteria (строка), значение — целая оценка.",
+        help_text="Одномерные оценки (taste_criteria / circle-чарты): ключ — id TasteCriteria (строка), "
+        "значение — целая оценка. Для Plot-критериев используйте plot_marks.",
+    )
+    plot_marks = PlotMarkSerializer(
+        many=True,
+        required=False,
+        help_text="Точки для Plot-критериев: список {criteria, x, mark}. criteria — id TasteCriteria, "
+        "привязанного к Plot-чарту; x — деление оси X чарта; mark — значение оси Y.",
     )
     taste_tags = serializers.ListField(
         child=serializers.IntegerField(),
@@ -445,6 +359,25 @@ class ProductReviewWriteSerializer(serializers.Serializer):
 
 
 class ProductInTastingSerializer(ProductSerializer):
+    """Карточка продукта в контексте конкретной дегустации: информация + оценочная часть
+    (критерии/чарты/плоты/блоки и личные оценки текущего пользователя по этому ProductTasting).
+
+    Весь контекст вьюшка кладёт в obj.__dict__: `_taste_criteria_rows` (строки
+    ProductTastingTasteCriteria с select_related criteria/chart), `_taste_blocks`,
+    `_tea_flavor_combination`, `_category`, `_current_tasting_mark`, `_current_review`."""
+
+    taste_criteria = serializers.SerializerMethodField()
+    charts = serializers.SerializerMethodField()
+    plots = serializers.SerializerMethodField()
+    taste_blocks = serializers.SerializerMethodField()
+    taste_tags = serializers.SerializerMethodField()
+    tasted = serializers.SerializerMethodField()
+    is_bookmarked = serializers.SerializerMethodField()
+    is_reviewed = serializers.SerializerMethodField()
+    self_comment = serializers.SerializerMethodField()
+    global_comment = serializers.SerializerMethodField()
+    user_composition = serializers.SerializerMethodField()
+    total_score = serializers.SerializerMethodField()
     tea_flavor_combination = serializers.SerializerMethodField()
     category = serializers.SerializerMethodField()
     is_nominated = serializers.SerializerMethodField()
@@ -452,11 +385,206 @@ class ProductInTastingSerializer(ProductSerializer):
 
     class Meta(ProductSerializer.Meta):
         fields = ProductSerializer.Meta.fields + [
+            "taste_criteria",
+            "charts",
+            "plots",
+            "taste_blocks",
+            "taste_tags",
+            "tasted",
+            "is_bookmarked",
+            "is_reviewed",
+            "self_comment",
+            "global_comment",
+            "user_composition",
+            "total_score",
             "tea_flavor_combination",
             "category",
             "is_nominated",
             "podium_place",
         ]
+
+    # --- личный отзыв (ProductReview для текущего product_tasting) ---
+
+    @staticmethod
+    def _review(obj: Product):
+        return obj.__dict__.get("_current_review")
+
+    def get_tasted(self, obj: Product) -> bool:
+        review = self._review(obj)
+        return bool(review and review.tasted)
+
+    def get_is_bookmarked(self, obj: Product) -> bool:
+        review = self._review(obj)
+        return bool(review and review.is_bookmarked)
+
+    def get_is_reviewed(self, obj: Product) -> bool:
+        review = self._review(obj)
+        if review is not None:
+            if review.global_comment or review.self_comment:
+                return True
+            if review.composition:
+                return True
+            if list(review.criteria_reviews.all()):
+                return True
+            if list(review.taste_tags.all()):
+                return True
+        mark = obj.__dict__.get("_current_tasting_mark")
+        return bool(mark and mark.is_nominated)
+
+    def get_self_comment(self, obj: Product) -> str | None:
+        review = self._review(obj)
+        return review.self_comment if review else None
+
+    def get_global_comment(self, obj: Product) -> str | None:
+        review = self._review(obj)
+        return review.global_comment if review else None
+
+    @extend_schema_field(USER_COMPOSITION_SCHEMA)
+    def get_user_composition(self, obj: Product):
+        review = self._review(obj)
+        return review.composition if review else None
+
+    @extend_schema_field(TASTE_TAGS_SCHEMA)
+    def get_taste_tags(self, obj: Product) -> list[dict]:
+        review = self._review(obj)
+        marked_ids: set[int] = set()
+        if review:
+            marked_ids = {t.pk for t in review.taste_tags.all()}
+        return [
+            {"id": t.pk, "name": t.name, "weight": t.weight, "marked": t.pk in marked_ids} for t in obj.taste_tags.all()
+        ]
+
+    @extend_schema_field(TOTAL_SCORE_SCHEMA)
+    def get_total_score(self, obj: Product) -> int | None:
+        review = self._review(obj)
+        if not review:
+            return None
+        marks_sum = sum(cr.mark for cr in review.criteria_reviews.all())
+        weights_sum = sum(t.weight for t in review.taste_tags.all())
+        total = Decimal(str(marks_sum + weights_sum))
+        return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    # --- конфиг оценки (ProductTastingTasteCriteria для текущего product_tasting) ---
+
+    @staticmethod
+    def _criteria_rows(obj: Product):
+        return obj.__dict__.get("_taste_criteria_rows", [])
+
+    def _criteria_marks(self, obj: Product) -> dict[int, int]:
+        review = self._review(obj)
+        if not review:
+            return {}
+        # Одномерные оценки (taste_criteria / circle-чарты) живут в строках с x IS NULL.
+        return {cr.criteria_id: cr.mark for cr in review.criteria_reviews.all() if cr.x is None}
+
+    def _plot_points(self, obj: Product) -> dict[int, list[dict]]:
+        """{criteria_id: [{x, mark}, ...]} — точки Plot-критериев (строки с заполненным x), отсортированы по x."""
+        review = self._review(obj)
+        if not review:
+            return {}
+        points: dict[int, list[dict]] = {}
+        for cr in review.criteria_reviews.all():
+            if cr.x is None:
+                continue
+            points.setdefault(cr.criteria_id, []).append({"x": cr.x, "mark": cr.mark})
+        for rows in points.values():
+            rows.sort(key=lambda p: p["x"])
+        return points
+
+    @staticmethod
+    def _criteria_item(row, marks: dict[int, int]) -> dict:
+        return {
+            "id": row.criteria_id,
+            "name": row.criteria.name,
+            "description": row.criteria.description,
+            "grade": row.criteria.grade,
+            "orientation": row.criteria.orientation,
+            "for_tea_combination": row.for_tea_combination,
+            "user_grade_review": marks.get(row.criteria_id),
+        }
+
+    @extend_schema_field(TASTE_CRITERIA_SCHEMA)
+    def get_taste_criteria(self, obj: Product) -> list[dict]:
+        marks = self._criteria_marks(obj)
+        out = []
+        for row in self._criteria_rows(obj):
+            if row.criteria.chart_id is not None:
+                continue
+            item = self._criteria_item(row, marks)
+            item["taste_block"] = row.criteria.taste_block_id
+            out.append(item)
+        return out
+
+    @extend_schema_field(CHARTS_SCHEMA)
+    def get_charts(self, obj: Product) -> list[dict]:
+        marks = self._criteria_marks(obj)
+        charts_by_id: dict[int, dict] = {}
+        chart_sort_key: dict[int, tuple[int, int]] = {}
+        for row in self._criteria_rows(obj):
+            chart = row.criteria.chart
+            if chart is None or chart.chart_type == ChartTypeEnum.PLOT:
+                continue
+            bucket = charts_by_id.get(chart.id)
+            if bucket is None:
+                bucket = {
+                    "id": chart.id,
+                    "name": chart.name,
+                    "description": chart.description,
+                    "color": chart.color,
+                    "label_placement": chart.label_placement,
+                    "taste_block": chart.taste_block_id,
+                    "criterias": [],
+                }
+                charts_by_id[chart.id] = bucket
+                chart_sort_key[chart.id] = (chart.order, chart.id)
+            bucket["criterias"].append(self._criteria_item(row, marks))
+        return [charts_by_id[cid] for cid in sorted(charts_by_id, key=chart_sort_key.get)]
+
+    @staticmethod
+    def _plot_criteria_item(row, points: dict[int, list[dict]]) -> dict:
+        return {
+            "id": row.criteria_id,
+            "name": row.criteria.name,
+            "description": row.criteria.description,
+            "for_tea_combination": row.for_tea_combination,
+            "user_grade_review": points.get(row.criteria_id, []),
+        }
+
+    @extend_schema_field(PLOTS_SCHEMA)
+    def get_plots(self, obj: Product) -> list[dict]:
+        points = self._plot_points(obj)
+        plots_by_id: dict[int, dict] = {}
+        plot_sort_key: dict[int, tuple[int, int]] = {}
+        for row in self._criteria_rows(obj):
+            chart = row.criteria.chart
+            if chart is None or chart.chart_type != ChartTypeEnum.PLOT:
+                continue
+            bucket = plots_by_id.get(chart.id)
+            if bucket is None:
+                bucket = {
+                    "id": chart.id,
+                    "name": chart.name,
+                    "description": chart.description,
+                    "color": chart.color,
+                    "x_axis": chart.x_axis,
+                    "y_axis": chart.y_axis,
+                    "x_axis_name": chart.x_axis_name,
+                    "y_axis_name": chart.y_axis_name,
+                    "taste_block": chart.taste_block_id,
+                    "criterias": [],
+                }
+                plots_by_id[chart.id] = bucket
+                plot_sort_key[chart.id] = (chart.order, chart.id)
+            bucket["criterias"].append(self._plot_criteria_item(row, points))
+        return [plots_by_id[cid] for cid in sorted(plots_by_id, key=plot_sort_key.get)]
+
+    # --- контекст дегустации ---
+
+    @extend_schema_field(TASTE_BLOCKS_SCHEMA)
+    def get_taste_blocks(self, obj: Product) -> list[dict]:
+        # Разделы карточки берём у ProductTasting (упорядочены через ProductTastingTasteBlock.order),
+        # их кладёт во _taste_blocks вьюшка при сборке продуктов дегустации.
+        return obj.__dict__.get("_taste_blocks", [])
 
     @extend_schema_field(TEA_FLAVOR_SCHEMA)
     def get_tea_flavor_combination(self, obj: Product) -> list[dict]:
@@ -544,6 +672,18 @@ class TastingResultChartSerializer(serializers.Serializer):
     criterias = TastingResultCriteriaItemSerializer(many=True)
 
 
+class TastingResultPlotSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    description = serializers.CharField(allow_null=True)
+    color = serializers.CharField(allow_null=True)
+    x_axis = serializers.JSONField()
+    y_axis = serializers.JSONField()
+    x_axis_name = serializers.CharField(allow_null=True)
+    y_axis_name = serializers.CharField(allow_null=True)
+    criterias = TastingResultCriteriaItemSerializer(many=True)
+
+
 class TastingResultTopTagItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
@@ -626,6 +766,7 @@ class TastingResultSerializer(serializers.Serializer):
     favorites = TastingResultFavoriteItemSerializer(many=True)
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
     charts = TastingResultChartSerializer(many=True)
+    plots = TastingResultPlotSerializer(many=True)
     top_tags = TastingResultTopTagItemSerializer(many=True)
     tea_matches = TastingResultTeaMatchSerializer(many=True)
     ice_cream_stats = IceCreamStatsField()

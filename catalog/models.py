@@ -20,6 +20,11 @@ class CircleChartLabelPlacementEnum(models.TextChoices):
     EDGES = "edges", "на рёбрах"
 
 
+class ChartTypeEnum(models.TextChoices):
+    CIRCLE = "circle", "Круговая"
+    PLOT = "plot", "График"
+
+
 class Line(models.Model):
     name = models.CharField(max_length=127)
 
@@ -51,12 +56,40 @@ class IceCreamLogo(models.Model):
         return self.intro_name or f"Логотип #{self.pk}"
 
 
-class CircleChart(models.Model):
+class TasteBlock(models.Model):
+    """Логический раздел карточки блюда («Оценка сухого листа», «Оценка заваренного чая», …).
+
+    Группирует разнородные средства оценки (Chart-плоты/круги и автономные TasteCriteria).
+    Порядок блоков задаётся per-tasting через through TastingTasteBlock.
+    """
+
+    name = models.CharField(max_length=127)
+    description = models.TextField(blank=True, null=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Chart(models.Model):
     name = models.CharField(max_length=127)
     description = models.TextField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
     color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
-    label_placement = models.CharField(choices=CircleChartLabelPlacementEnum.choices, default=CircleChartLabelPlacementEnum.EDGES)  # noqa
+    chart_type = models.CharField(choices=ChartTypeEnum.choices, default=ChartTypeEnum.CIRCLE)  # noqa
+    taste_block = models.ForeignKey(
+        TasteBlock, on_delete=models.SET_NULL, null=True, blank=True, default=None, related_name="charts"
+    )
+    label_placement = models.CharField(
+        choices=CircleChartLabelPlacementEnum.choices, default=CircleChartLabelPlacementEnum.EDGES
+    )  # noqa
+
+    # plot-специфика (chart_type == "plot"): на круговом чарте остаются пустыми.
+    # x_axis / y_axis — упорядоченные списки делений {value, label}, как TasteCriteria.grade.
+    # Y-шкала на Plot общая для всех его критериев — поэтому живёт здесь, а не на критерии.
+    x_axis = models.JSONField(blank=True, default=list)
+    y_axis = models.JSONField(blank=True, default=list)
+    x_axis_name = models.CharField(max_length=127, blank=True, null=True, default=None)
+    y_axis_name = models.CharField(max_length=127, blank=True, null=True, default=None)
 
     class Meta:
         ordering = ["order", "id"]
@@ -76,7 +109,12 @@ class TasteCriteria(models.Model):
         blank=True,
         default=None,
     )
-    chart = models.ForeignKey(CircleChart, on_delete=models.SET_NULL, null=True, blank=True, default=None)
+    chart = models.ForeignKey(Chart, on_delete=models.SET_NULL, null=True, blank=True, default=None)
+    # Раздел карточки, к которому относится автономный критерий. Для критериев с привязкой к chart
+    # игнорируется (блок берётся у самого chart) — в API у таких критериев taste_block не отдаём.
+    taste_block = models.ForeignKey(
+        TasteBlock, on_delete=models.SET_NULL, null=True, blank=True, default=None, related_name="criterias"
+    )
 
     class Meta:
         ordering = ["order", "id"]
@@ -106,9 +144,6 @@ class Product(models.Model):
     result_phrase = models.TextField(blank=True, null=True)
     color = models.CharField(max_length=7, blank=True, null=True)  # Hex color code
 
-    taste_criteria = models.ManyToManyField(
-        TasteCriteria, related_name="products", blank=True, through="ProductTasteCriteria"
-    )
     taste_tags = models.ManyToManyField(TasteTags, related_name="products", blank=True)
     tasters = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
@@ -136,16 +171,6 @@ class Product(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_type_display()} — {self.name}"
-
-
-class ProductTasteCriteria(models.Model):
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    criteria = models.ForeignKey(TasteCriteria, on_delete=models.CASCADE)
-    order = models.PositiveIntegerField(default=0)
-    for_tea_combination = models.BooleanField(default=False)
-
-    def __str__(self) -> str:
-        return f"{self.product} — {self.criteria}"
 
 
 class ProductIceCreamLogo(models.Model):
@@ -189,9 +214,48 @@ class ProductTasting(models.Model):
         related_name="+",
         blank=True,
     )
+    # Конфиг оценки живёт на уровне (продукт, дегустация): что и как оценивать может отличаться
+    # от дегустации к дегустации. Сам Product — чисто информационная сущность.
+    taste_criteria = models.ManyToManyField(
+        TasteCriteria, through="ProductTastingTasteCriteria", related_name="product_tastings", blank=True
+    )
+    taste_blocks = models.ManyToManyField(
+        TasteBlock, through="ProductTastingTasteBlock", related_name="product_tastings", blank=True
+    )
 
     def __str__(self) -> str:
         return f"{self.tasting} — {self.product}"
+
+
+class ProductTastingTasteCriteria(models.Model):
+    product_tasting = models.ForeignKey(ProductTasting, on_delete=models.CASCADE)
+    criteria = models.ForeignKey(TasteCriteria, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+    for_tea_combination = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["product_tasting", "criteria"], name="uniq_product_tasting_criteria"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_tasting} — {self.criteria}"
+
+
+class ProductTastingTasteBlock(models.Model):
+    product_tasting = models.ForeignKey(ProductTasting, on_delete=models.CASCADE)
+    taste_block = models.ForeignKey(TasteBlock, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["product_tasting", "taste_block"], name="uniq_product_tasting_taste_block"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_tasting} — {self.taste_block}"
 
 
 class TastingParticipation(models.Model):
@@ -220,6 +284,13 @@ class ProductReview(models.Model):
         on_delete=models.CASCADE,
         related_name="product_reviews",
     )
+    # Оценка привязана к (гость, продукт-в-дегустации). product оставляем денормализацией
+    # (заполняется в save из product_tasting) — упрощает фильтры по продукту и M2M Product.tasters.
+    product_tasting = models.ForeignKey(
+        ProductTasting,
+        on_delete=models.CASCADE,
+        related_name="reviews",
+    )
     product = models.ForeignKey(
         Product,
         on_delete=models.CASCADE,
@@ -242,20 +313,45 @@ class ProductReview(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["user", "product"], name="uniq_user_product_review"),
+            models.UniqueConstraint(fields=["user", "product_tasting"], name="uniq_user_product_tasting_review"),
         ]
 
+    def save(self, *args, **kwargs):
+        if self.product_tasting_id and not self.product_id:
+            self.product_id = self.product_tasting.product_id
+        super().save(*args, **kwargs)
+
     def __str__(self) -> str:
-        return f"{self.user} → {self.product}"
+        return f"{self.user} → {self.product_tasting}"
 
 
 class ProductCriteriaReview(models.Model):
     product_review = models.ForeignKey(ProductReview, on_delete=models.CASCADE, related_name="criteria_reviews")
     criteria = models.ForeignKey(TasteCriteria, on_delete=models.CASCADE, related_name="criteria")
+    # mark = Y-координата точки (значение по шкале критерия / y_axis чарта).
     mark = models.IntegerField()
+    # x — координата на оси X для критериев Plot-чарта. NULL для обычных/круговых критериев,
+    # у которых оценка одномерна (одна строка на (review, criteria)). У Plot-критерия точек
+    # столько, сколько делений на оси X: одна строка на (review, criteria, x).
+    x = models.PositiveSmallIntegerField(null=True, blank=True, default=None)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product_review", "criteria"],
+                condition=models.Q(x__isnull=True),
+                name="uniq_criteria_review_no_x",
+            ),
+            models.UniqueConstraint(
+                fields=["product_review", "criteria", "x"],
+                condition=models.Q(x__isnull=False),
+                name="uniq_criteria_review_per_x",
+            ),
+        ]
 
     def __str__(self) -> str:
-        return f"{self.product_review} — {self.criteria}: {self.mark}"
+        suffix = f" @x={self.x}" if self.x is not None else ""
+        return f"{self.product_review} — {self.criteria}: {self.mark}{suffix}"
 
 
 class ProductTastingUserMark(models.Model):

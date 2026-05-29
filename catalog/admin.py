@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from .models import (
-    CircleChart,
+    Chart,
     Config,
     IceCreamLogo,
     TasteTags,
@@ -11,9 +11,11 @@ from .models import (
     ProductCriteriaReview,
     ProductIceCreamLogo,
     ProductReview,
-    ProductTasteCriteria,
     ProductTasting,
+    ProductTastingTasteBlock,
+    ProductTastingTasteCriteria,
     ProductTastingUserMark,
+    TasteBlock,
     TasteCriteria,
     Tasting,
     TastingParticipation,
@@ -48,22 +50,43 @@ class IceCreamLogoAdmin(admin.ModelAdmin):
         return format_html('<img src="{}" style="height:40px;border-radius:4px"/>', obj.image.url)
 
 
-@admin.register(CircleChart)
-class CircleChartAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "name", "label_placement", "color")
-    list_editable = ("order", "label_placement", "color")
-    list_filter = ("label_placement",)
+@admin.register(TasteBlock)
+class TasteBlockAdmin(admin.ModelAdmin):
+    list_display = ("id", "name")
     search_fields = ("name", "id")
+    ordering = ("name",)
+
+
+@admin.register(Chart)
+class ChartAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "name", "chart_type", "taste_block", "label_placement", "color")
+    list_editable = ("order", "chart_type", "taste_block", "label_placement", "color")
+    list_filter = ("chart_type", "label_placement", "taste_block")
+    search_fields = ("name", "id")
+    autocomplete_fields = ("taste_block",)
     ordering = ("order", "id")
+    fieldsets = (
+        (None, {"fields": ("name", "description", "order", "color", "chart_type", "taste_block")}),
+        ("Круговой чарт", {"fields": ("label_placement",)}),
+        (
+            "График (Plot)",
+            {
+                "classes": ("collapse",),
+                "description": "Заполняется только при chart_type=График. "
+                'x_axis/y_axis — списки делений [{"value": int, "label": str}, ...].',
+                "fields": ("x_axis", "x_axis_name", "y_axis", "y_axis_name"),
+            },
+        ),
+    )
 
 
 @admin.register(TasteCriteria)
 class TasteCriteriaAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "name", "orientation", "chart", "grade")
-    list_editable = ("order", "orientation", "chart")
-    list_filter = ("orientation", "chart")
+    list_display = ("id", "order", "name", "orientation", "chart", "taste_block", "grade")
+    list_editable = ("order", "orientation", "chart", "taste_block")
+    list_filter = ("orientation", "chart", "taste_block")
     search_fields = ("name", "id")
-    autocomplete_fields = ("chart",)
+    autocomplete_fields = ("chart", "taste_block")
     ordering = ("order", "id")
 
 
@@ -71,12 +94,6 @@ class ProductIceCreamLogoInline(admin.TabularInline):
     model = ProductIceCreamLogo
     extra = 0
     autocomplete_fields = ("logo",)
-
-
-class ProductTasteCriteriaInline(admin.TabularInline):
-    model = ProductTasteCriteria
-    extra = 0
-    autocomplete_fields = ("criteria",)
 
 
 class ProductInTastingsInline(admin.TabularInline):
@@ -122,7 +139,7 @@ class ProductAdmin(admin.ModelAdmin):
         ("Результат", {"fields": ("result_phrase",)}),
         ("Теги", {"fields": ("taste_tags",)}),
     )
-    inlines = [ProductIceCreamLogoInline, ProductTasteCriteriaInline, ProductInTastingsInline]
+    inlines = [ProductIceCreamLogoInline, ProductInTastingsInline]
 
     @admin.display(description="Превью")
     def thumb(self, obj: Product):
@@ -144,6 +161,24 @@ class ProductTastingInline(admin.TabularInline):
     autocomplete_fields = ("product", "tea_flavor_combination")
     fields = ("product", "category", "order", "tea_flavor_combination")
     ordering = ("order",)
+
+
+class ProductTastingTasteCriteriaInline(admin.TabularInline):
+    model = ProductTastingTasteCriteria
+    extra = 0
+    autocomplete_fields = ("criteria",)
+    fields = ("criteria", "order", "for_tea_combination")
+    ordering = ("order",)
+
+
+class ProductTastingTasteBlockInline(admin.TabularInline):
+    model = ProductTastingTasteBlock
+    extra = 0
+    autocomplete_fields = ("taste_block",)
+    fields = ("taste_block", "order")
+    ordering = ("order",)
+    verbose_name = "Раздел оценки"
+    verbose_name_plural = "Разделы оценки (порядок в карточке)"
 
 
 class TastingUserMarksInline(admin.TabularInline):
@@ -198,17 +233,19 @@ class ProductTastingAdmin(admin.ModelAdmin):
     autocomplete_fields = ("product", "tasting", "tea_flavor_combination")
     ordering = ("tasting", "order")
     fields = ("tasting", "product", "category", "order", "tea_flavor_combination")
+    inlines = [ProductTastingTasteCriteriaInline, ProductTastingTasteBlockInline]
 
 
 class ProductCriteriaReviewInline(admin.TabularInline):
     model = ProductCriteriaReview
     extra = 0
     autocomplete_fields = ("criteria",)
+    fields = ("criteria", "x", "mark")
 
 
 @admin.register(ProductReview)
 class ProductReviewAdmin(admin.ModelAdmin):
-    list_display = ("user", "product", "tasted", "is_bookmarked", "updated_at")
+    list_display = ("user", "product_tasting", "tasted", "is_bookmarked", "updated_at")
     list_editable = ("tasted", "is_bookmarked")
     list_filter = ("tasted", "is_bookmarked", "updated_at", "taste_tags")
     search_fields = (
@@ -219,13 +256,15 @@ class ProductReviewAdmin(admin.ModelAdmin):
         "user__id",
         "product__name",
         "product__id",
+        "product_tasting__tasting__title",
+        "product_tasting__id",
     )
-    autocomplete_fields = ("user", "product")
+    autocomplete_fields = ("user", "product_tasting")
     filter_horizontal = ("taste_tags",)
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("product", "created_at", "updated_at")
     inlines = [ProductCriteriaReviewInline]
     fieldsets = (
-        (None, {"fields": ("user", "product")}),
+        (None, {"fields": ("user", "product_tasting", "product")}),
         ("Состояние", {"fields": ("tasted", "is_bookmarked")}),
         ("Отзыв", {"fields": ("global_comment", "self_comment", "composition", "taste_tags")}),
         ("Служебное", {"fields": ("created_at", "updated_at")}),
@@ -263,11 +302,7 @@ class ProductTastingUserMarkAdmin(admin.ModelAdmin):
         return obj.product_tasting.product
 
     def get_queryset(self, request):
-        return (
-            super()
-            .get_queryset(request)
-            .select_related("user", "tasting", "product_tasting__product")
-        )
+        return super().get_queryset(request).select_related("user", "tasting", "product_tasting__product")
 
 
 @admin.register(Config)
