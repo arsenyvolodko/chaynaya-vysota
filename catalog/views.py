@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import GenericViewSet
 
 from .models import (
+    Chart,
     ChartTypeEnum,
     Config,
     TasteTags,
@@ -110,7 +111,8 @@ def _attach_pt_context(pt: ProductTasting) -> Product:
     p = pt.product
     p.__dict__["_taste_criteria_rows"] = getattr(pt, "_tc_rows", [])
     p.__dict__["_taste_blocks"] = [
-        {"id": tb.taste_block_id, "name": tb.taste_block.name} for tb in getattr(pt, "_tb_rows", [])
+        {"id": tb.taste_block_id, "name": tb.taste_block.name, "show_tags": tb.show_tags}
+        for tb in getattr(pt, "_tb_rows", [])
     ]
     p.__dict__["_phrase_rows"] = getattr(pt, "_phrase_rows", [])
     p.__dict__["_free_text_rows"] = getattr(pt, "_free_text_rows", [])
@@ -407,6 +409,41 @@ class TastingViewSet(RetrieveModelMixin, GenericViewSet):
         qs = Tasting.objects.filter(participants=request.user).order_by("-date")
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
+
+    @extend_schema(request=None, responses={200: ProductInTastingSerializer})
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"products/(?P<product_id>[0-9a-fA-F-]+)/charts/(?P<chart_id>[0-9]+)/marks",
+        permission_classes=[IsAuthenticated],
+    )
+    def clear_chart_marks(self, request, pk=None, product_id=None, chart_id=None):
+        """Очистить оценки гостя по конкретному plot-чарту этой позиции («очистить график»).
+        Удаляет все ProductCriteriaReview по критериям этого чарта в отзыве текущего юзера."""
+        tasting = self.get_object()
+        pt = ProductTasting.objects.filter(tasting=tasting, product_id=product_id).first()
+        if pt is None:
+            raise NotFound("Product is not part of this tasting.")
+
+        chart = Chart.objects.filter(pk=chart_id, chart_type=ChartTypeEnum.PLOT).first()
+        if chart is None:
+            raise NotFound("Plot chart not found.")
+
+        # Чарт должен быть сконфигурирован для этой позиции (явно через charts или через входящие критерии).
+        allowed = _allowed_criteria(pt)
+        chart_criteria_ids = [cid for cid, c in allowed.items() if c.chart_id == chart.pk]
+        if not chart_criteria_ids:
+            raise NotFound("Chart is not configured for this product in this tasting.")
+
+        review = ProductReview.objects.filter(user=request.user, product_tasting=pt).first()
+        if review is not None:
+            ProductCriteriaReview.objects.filter(
+                product_review=review, criteria_id__in=chart_criteria_ids
+            ).delete()
+
+        pt_full = ProductTasting.objects.filter(pk=pt.pk).prefetch_related(*_pt_prefetches(request.user)).first()
+        product = _attach_pt_context(pt_full)
+        return Response(ProductInTastingSerializer(product, context={"request": request}).data)
 
     @extend_schema(request=NominateWriteSerializer, responses={200: NominateResponseSerializer})
     @action(
@@ -709,15 +746,32 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         plots_by_id[cid] for cid in sorted(plots_by_id, key=lambda c: (plot_objects[c].order, plot_objects[c].id))
     ]
 
-    top_tags_qs = (
-        TasteTags.objects.filter(
-            reviews__user=user,
-            reviews__product_tasting__tasting=tasting,
-        )
-        .annotate(count=Count("reviews", distinct=True))
-        .order_by("-count", "id")[:3]
-    )
-    top_tags = [{"id": t.id, "name": t.name, "weight": t.weight, "count": t.count} for t in top_tags_qs]
+    # Облако тегов: ВСЕ выбранные теги + слова из заполненных пропусков PhraseTemplate.
+    # weight = сколько раз элемент встретился в отзывах гостя в этой дегустации.
+    tag_rows = TasteTags.objects.filter(
+        reviews__user=user,
+        reviews__product_tasting__tasting=tasting,
+    ).annotate(count=Count("reviews", distinct=True))
+    tags_cloud = [{"id": t.id, "name": t.name, "weight": t.count, "source": "tag"} for t in tag_rows]
+
+    # Пропуски фраз-шаблонов: каждое непустое заполнение нормализуем (trim + lowercase) и считаем.
+    phrase_answer_counts: dict[str, int] = defaultdict(int)
+    phrase_answer_rows = PhraseTemplateReview.objects.filter(
+        product_review__user=user,
+        product_review__product_tasting__tasting=tasting,
+    ).values_list("answers", flat=True)
+    for answers in phrase_answer_rows:
+        for ans in answers or []:
+            if not isinstance(ans, str):
+                continue
+            norm = ans.strip().lower()
+            if norm:
+                phrase_answer_counts[norm] += 1
+    tags_cloud += [
+        {"id": None, "name": name, "weight": count, "source": "phrase"}
+        for name, count in phrase_answer_counts.items()
+    ]
+    tags_cloud.sort(key=lambda x: (-x["weight"], x["name"]))
 
     pt_with_combos = (
         ProductTasting.objects.filter(tasting=tasting)
@@ -788,7 +842,7 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         "criteria_breakdown": criteria_breakdown,
         "charts": charts_breakdown,
         "plots": plots_breakdown,
-        "top_tags": top_tags,
+        "tags_cloud": tags_cloud,
         "tea_matches": tea_matches,
         "ice_cream_stats": ice_cream_stats,
     }

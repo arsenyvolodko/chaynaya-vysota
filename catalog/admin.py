@@ -168,6 +168,8 @@ class ProductAdmin(admin.ModelAdmin):
                     "tea_geography",
                     "tea_plucking_season",
                     "tea_rubrucator",
+                    "tea_latitude",
+                    "tea_longitude",
                 ),
             },
         ),
@@ -223,7 +225,7 @@ class ProductTastingTasteBlockInline(admin.TabularInline):
     model = ProductTastingTasteBlock
     extra = 0
     autocomplete_fields = ("taste_block",)
-    fields = ("taste_block", "order")
+    fields = ("taste_block", "order", "show_tags")
     ordering = ("order",)
     verbose_name = "Раздел оценки"
     verbose_name_plural = "Разделы оценки (порядок в карточке)"

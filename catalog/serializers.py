@@ -110,8 +110,9 @@ TASTE_BLOCKS_SCHEMA = {
         "properties": {
             "id": {"type": "integer"},
             "name": {"type": "string"},
+            "show_tags": {"type": "boolean", "description": "Отображать ли блок тегов внутри этого раздела."},
         },
-        "required": ["id", "name"],
+        "required": ["id", "name", "show_tags"],
     },
 }
 
@@ -377,6 +378,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "tea_geography",
             "tea_plucking_season",
             "tea_rubrucator",
+            "tea_latitude",
+            "tea_longitude",
         ]
 
     def get_line(self, obj: Product) -> str | None:
@@ -888,11 +891,13 @@ class TastingResultPlotSerializer(serializers.Serializer):
     criterias = TastingResultCriteriaItemSerializer(many=True)
 
 
-class TastingResultTopTagItemSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
+class TastingResultTagCloudItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField(allow_null=True, help_text="id TasteTags для source=tag; null для source=phrase.")
     name = serializers.CharField()
-    weight = serializers.FloatField()
-    count = serializers.IntegerField()
+    weight = serializers.IntegerField(help_text="Сколько раз элемент встретился в отзывах гостя в этой дегустации.")
+    source = serializers.ChoiceField(
+        choices=["tag", "phrase"], help_text="`tag` — выбранный TasteTags; `phrase` — слово из пропуска PhraseTemplate."
+    )
 
 
 class TastingResultTeaMatchSerializer(serializers.Serializer):
@@ -971,7 +976,7 @@ class TastingResultSerializer(serializers.Serializer):
     criteria_breakdown = TastingResultCriteriaItemSerializer(many=True)
     charts = TastingResultChartSerializer(many=True)
     plots = TastingResultPlotSerializer(many=True)
-    top_tags = TastingResultTopTagItemSerializer(many=True)
+    tags_cloud = TastingResultTagCloudItemSerializer(many=True)
     tea_matches = TastingResultTeaMatchSerializer(many=True)
     ice_cream_stats = IceCreamStatsField()
 
