@@ -21,6 +21,7 @@ from .models import (
     Product,
     ProductCriteriaReview,
     ProductIceCreamLogo,
+    ProductPhoto,
     FreeTextPromptReview,
     PhraseTemplateReview,
     ProductReview,
@@ -88,9 +89,12 @@ def _pt_prefetches(user):
         ),
         Prefetch(
             "producttastingtasteblock_set",
-            queryset=ProductTastingTasteBlock.objects.select_related("taste_block").order_by("order", "id"),
+            queryset=ProductTastingTasteBlock.objects.select_related("taste_block")
+            .prefetch_related(Prefetch("photos", queryset=ProductPhoto.objects.order_by("order", "id")))
+            .order_by("order", "id"),
             to_attr="_tb_rows",
         ),
+        Prefetch("photos", queryset=ProductPhoto.objects.order_by("order", "id"), to_attr="_photo_rows"),
         Prefetch(
             "producttastingphrasetemplate_set",
             queryset=ProductTastingPhraseTemplate.objects.select_related("phrase_template").order_by("order", "id"),
@@ -111,9 +115,15 @@ def _attach_pt_context(pt: ProductTasting) -> Product:
     p = pt.product
     p.__dict__["_taste_criteria_rows"] = getattr(pt, "_tc_rows", [])
     p.__dict__["_taste_blocks"] = [
-        {"id": tb.taste_block_id, "name": tb.taste_block.name, "show_tags": tb.show_tags}
+        {
+            "id": tb.taste_block_id,
+            "name": tb.taste_block.name,
+            "show_tags": tb.show_tags,
+            "photos": list(tb.photos.all()),
+        }
         for tb in getattr(pt, "_tb_rows", [])
     ]
+    p.__dict__["_photos"] = list(getattr(pt, "_photo_rows", []))
     p.__dict__["_phrase_rows"] = getattr(pt, "_phrase_rows", [])
     p.__dict__["_free_text_rows"] = getattr(pt, "_free_text_rows", [])
     p.__dict__["_chart_rows"] = getattr(pt, "_chart_rows", [])

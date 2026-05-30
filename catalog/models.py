@@ -239,6 +239,27 @@ class ProductIceCreamLogo(models.Model):
         return f"{self.product} — {self.logo}"
 
 
+class ProductPhoto(models.Model):
+    """Произвольное фото продукта. В сам Product можно загрузить сколько угодно фото; затем
+    нужные выбираются per-ProductTasting и/или per-ProductTastingTasteBlock. `name` — служебное,
+    на фронт не отдаётся."""
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="photos")
+    image = models.FileField(
+        upload_to="product_photos/",
+        validators=[FileExtensionValidator(allowed_extensions=["png", "jpg", "jpeg", "svg"])],
+    )
+    name = models.CharField(max_length=200, blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self) -> str:
+        label = self.name or f"#{self.pk}"
+        return f"{self.product.name} — {label}"
+
+
 class Tasting(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200)
@@ -290,6 +311,9 @@ class ProductTasting(models.Model):
     free_text_prompts = models.ManyToManyField(
         FreeTextPrompt, through="ProductTastingFreeTextPrompt", related_name="product_tastings", blank=True
     )
+    # Произвольный набор фото продукта, выбранных для карточки в этой дегустации. Несвязное
+    # подмножество ProductPhoto этого же продукта (с per-block выбором не пересекается логически).
+    photos = models.ManyToManyField(ProductPhoto, related_name="product_tastings", blank=True)
 
     def __str__(self) -> str:
         return f"{self.tasting} — {self.product}"
@@ -316,6 +340,9 @@ class ProductTastingTasteBlock(models.Model):
     taste_block = models.ForeignKey(TasteBlock, on_delete=models.CASCADE)
     order = models.PositiveIntegerField(default=0)
     show_tags = models.BooleanField(default=False, verbose_name="Отображать теги в данном блоке")
+    # Произвольный набор фото продукта для этого раздела карточки. Независим от ProductTasting.photos
+    # и от других блоков — наборы могут пересекаться или нет.
+    photos = models.ManyToManyField(ProductPhoto, related_name="taste_blocks", blank=True)
 
     class Meta:
         ordering = ["order", "id"]

@@ -1,4 +1,7 @@
+from django import forms
 from django.contrib import admin
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 from django.utils.html import format_html
 
 from .models import (
@@ -14,6 +17,7 @@ from .models import (
     Product,
     ProductCriteriaReview,
     ProductIceCreamLogo,
+    ProductPhoto,
     ProductReview,
     ProductTasting,
     ProductTastingChart,
@@ -129,6 +133,39 @@ class ProductIceCreamLogoInline(admin.TabularInline):
     autocomplete_fields = ("logo",)
 
 
+class ProductPhotoInline(admin.TabularInline):
+    model = ProductPhoto
+    extra = 0
+    fields = ("image", "name", "order", "thumb")
+    readonly_fields = ("thumb",)
+    ordering = ("order", "id")
+    verbose_name = "Фото"
+    verbose_name_plural = "Фото (загрузить; выбираются в дегустациях)"
+
+    @admin.display(description="Превью")
+    def thumb(self, obj: ProductPhoto):
+        if not obj.image:
+            return "—"
+        return format_html('<img src="{}" style="height:40px;border-radius:4px"/>', obj.image.url)
+
+
+@admin.register(ProductPhoto)
+class ProductPhotoAdmin(admin.ModelAdmin):
+    list_display = ("id", "product", "name", "order", "thumb")
+    list_editable = ("name", "order")
+    list_filter = ("product__type",)
+    search_fields = ("name", "id", "product__name", "product__id")
+    autocomplete_fields = ("product",)
+    list_select_related = ("product",)
+    ordering = ("product", "order", "id")
+
+    @admin.display(description="Превью")
+    def thumb(self, obj: ProductPhoto):
+        if not obj.image:
+            return "—"
+        return format_html('<img src="{}" style="height:40px;border-radius:4px"/>', obj.image.url)
+
+
 class ProductInTastingsInline(admin.TabularInline):
     model = ProductTasting
     extra = 0
@@ -176,7 +213,7 @@ class ProductAdmin(admin.ModelAdmin):
         ("Результат", {"fields": ("result_phrase",)}),
         ("Теги", {"fields": ("taste_tags",)}),
     )
-    inlines = [ProductIceCreamLogoInline, ProductInTastingsInline]
+    inlines = [ProductPhotoInline, ProductIceCreamLogoInline, ProductInTastingsInline]
 
     @admin.display(description="Превью")
     def thumb(self, obj: Product):
@@ -221,14 +258,51 @@ class ProductTastingTasteCriteriaInline(admin.TabularInline):
     verbose_name_plural = "Автономные критерии (без чарта)"
 
 
+def _validate_photos_belong_to_product(photos, product_id, where=""):
+    if photos and product_id:
+        bad = [p.id for p in photos if p.product_id != product_id]
+        if bad:
+            suffix = f" ({where})" if where else ""
+            raise ValidationError(f"Эти фото принадлежат другому продукту: {bad}{suffix}.")
+
+
+def _scope_photos_to_product(db_field, request, kwargs):
+    """Ограничивает виджет выбора `photos` фотками продукта редактируемого ProductTasting.
+    Сам ProductTasting кладётся на request его админкой в get_form. На add-форме (продукт ещё
+    не выбран) показываем пустой список — фото выбираются после сохранения позиции."""
+    if db_field.name == "photos":
+        obj = getattr(request, "_producttasting_obj", None)
+        product_id = getattr(obj, "product_id", None)
+        kwargs["queryset"] = ProductPhoto.objects.filter(product_id=product_id) if product_id else ProductPhoto.objects.none()
+
+
+class ProductTastingTasteBlockInlineFormSet(BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        product_id = getattr(self.instance, "product_id", None)
+        if not product_id:
+            return
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data") or form.cleaned_data.get("DELETE"):
+                continue
+            _validate_photos_belong_to_product(
+                form.cleaned_data.get("photos"), product_id, where=f"блок «{form.cleaned_data.get('taste_block')}»"
+            )
+
+
 class ProductTastingTasteBlockInline(admin.TabularInline):
     model = ProductTastingTasteBlock
+    formset = ProductTastingTasteBlockInlineFormSet
     extra = 0
     autocomplete_fields = ("taste_block",)
-    fields = ("taste_block", "order", "show_tags")
+    fields = ("taste_block", "order", "show_tags", "photos")
     ordering = ("order",)
     verbose_name = "Раздел оценки"
     verbose_name_plural = "Разделы оценки (порядок в карточке)"
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        _scope_photos_to_product(db_field, request, kwargs)
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
 
 
 class ProductTastingPhraseTemplateInline(admin.TabularInline):
@@ -293,16 +367,30 @@ class TastingAdmin(admin.ModelAdmin):
         return obj._participants
 
 
+class ProductTastingAdminForm(forms.ModelForm):
+    class Meta:
+        model = ProductTasting
+        fields = "__all__"
+
+    def clean_photos(self):
+        photos = self.cleaned_data.get("photos")
+        product = self.cleaned_data.get("product") or getattr(self.instance, "product", None)
+        _validate_photos_belong_to_product(photos, getattr(product, "id", None))
+        return photos
+
+
 @admin.register(ProductTasting)
 class ProductTastingAdmin(admin.ModelAdmin):
+    form = ProductTastingAdminForm
     list_display = ("__str__", "category", "order", "charts_n", "criteria_n", "blocks_n", "phrases_n", "free_text_n")
     list_filter = ("tasting", "category")
     search_fields = ("product__name", "product__id", "tasting__title", "tasting__id", "category", "id")
     autocomplete_fields = ("product", "tasting", "tea_flavor_combination")
+    filter_horizontal = ("photos",)
     list_select_related = ("tasting", "product")
     ordering = ("tasting", "order")
     save_on_top = True
-    fields = ("tasting", "product", "category", "order", "tea_flavor_combination")
+    fields = ("tasting", "product", "category", "order", "tea_flavor_combination", "photos")
     inlines = [
         ProductTastingChartInline,
         ProductTastingTasteCriteriaInline,
@@ -310,6 +398,16 @@ class ProductTastingAdmin(admin.ModelAdmin):
         ProductTastingPhraseTemplateInline,
         ProductTastingFreeTextPromptInline,
     ]
+
+    def get_form(self, request, obj=None, **kwargs):
+        # Кладём редактируемый ProductTasting на request, чтобы и его форма, и инлайны (блоки)
+        # отфильтровали выбор photos по продукту этой позиции.
+        request._producttasting_obj = obj
+        return super().get_form(request, obj, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        _scope_photos_to_product(db_field, request, kwargs)
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
 
     def get_queryset(self, request):
         from django.db.models import Count

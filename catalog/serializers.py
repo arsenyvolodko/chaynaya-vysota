@@ -99,6 +99,19 @@ TASTE_CRITERIA_SCHEMA = {
     "items": _STANDALONE_TASTE_CRITERIA_ITEM_SCHEMA,
 }
 
+PHOTOS_SCHEMA = {
+    "type": "array",
+    "description": "Выбранные фото продукта (URL + id). Имя фото служебное и не отдаётся.",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "image": {"type": "string", "format": "uri"},
+        },
+        "required": ["id", "image"],
+    },
+}
+
 TASTE_BLOCKS_SCHEMA = {
     "type": "array",
     "description": (
@@ -111,8 +124,9 @@ TASTE_BLOCKS_SCHEMA = {
             "id": {"type": "integer"},
             "name": {"type": "string"},
             "show_tags": {"type": "boolean", "description": "Отображать ли блок тегов внутри этого раздела."},
+            "photos": PHOTOS_SCHEMA,
         },
-        "required": ["id", "name", "show_tags"],
+        "required": ["id", "name", "show_tags", "photos"],
     },
 }
 
@@ -470,6 +484,7 @@ class ProductInTastingSerializer(ProductSerializer):
     phrases = serializers.SerializerMethodField()
     free_text_prompts = serializers.SerializerMethodField()
     taste_blocks = serializers.SerializerMethodField()
+    photos = serializers.SerializerMethodField()
     taste_tags = serializers.SerializerMethodField()
     tasted = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
@@ -491,6 +506,7 @@ class ProductInTastingSerializer(ProductSerializer):
             "phrases",
             "free_text_prompts",
             "taste_blocks",
+            "photos",
             "taste_tags",
             "tasted",
             "is_bookmarked",
@@ -787,11 +803,34 @@ class ProductInTastingSerializer(ProductSerializer):
 
     # --- контекст дегустации ---
 
+    def _photo_payload(self, photos) -> list[dict]:
+        """[{id, image}] с абсолютными URL. Имя фото служебное — на фронт не отдаётся."""
+        request = self.context.get("request")
+        out = []
+        for ph in photos:
+            if not ph.image:
+                continue
+            url = ph.image.url
+            out.append({"id": ph.id, "image": request.build_absolute_uri(url) if request else url})
+        return out
+
+    @extend_schema_field(PHOTOS_SCHEMA)
+    def get_photos(self, obj: Product) -> list[dict]:
+        return self._photo_payload(obj.__dict__.get("_photos", []))
+
     @extend_schema_field(TASTE_BLOCKS_SCHEMA)
     def get_taste_blocks(self, obj: Product) -> list[dict]:
         # Разделы карточки берём у ProductTasting (упорядочены через ProductTastingTasteBlock.order),
-        # их кладёт во _taste_blocks вьюшка при сборке продуктов дегустации.
-        return obj.__dict__.get("_taste_blocks", [])
+        # их кладёт во _taste_blocks вьюшка при сборке продуктов дегустации. Фото блока резолвим в URL здесь.
+        return [
+            {
+                "id": tb["id"],
+                "name": tb["name"],
+                "show_tags": tb["show_tags"],
+                "photos": self._photo_payload(tb.get("photos", [])),
+            }
+            for tb in obj.__dict__.get("_taste_blocks", [])
+        ]
 
     @extend_schema_field(TEA_FLAVOR_SCHEMA)
     def get_tea_flavor_combination(self, obj: Product) -> list[dict]:
