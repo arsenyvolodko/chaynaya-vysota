@@ -129,6 +129,61 @@ class TasteCriteria(models.Model):
         return self.name
 
 
+PHRASE_BLANK_TOKEN = "{blank}"
+
+
+class PhraseTemplate(models.Model):
+    """Заготовленная фраза с пропусками («cloze»). `template` хранит текст с токенами {blank}
+    на месте пропусков, напр.: «Этот чай напомнил мне {blank}, а также {blank}.». Гость заполняет
+    пропуски на фронте; ответы (по одному на пропуск, по порядку) хранятся в PhraseTemplateReview."""
+
+    name = models.CharField(max_length=127, blank=True, null=True, default=None)
+    template = models.TextField(
+        help_text="Текст с токенами {blank} на месте пропусков, напр.: "
+        "«Этот чай напомнил мне {blank}, а также {blank}.»"
+    )
+    order = models.PositiveIntegerField(default=0)
+    taste_block = models.ForeignKey(
+        TasteBlock, on_delete=models.SET_NULL, null=True, blank=True, default=None, related_name="phrase_templates"
+    )
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    @property
+    def blanks_count(self) -> int:
+        return self.template.count(PHRASE_BLANK_TOKEN)
+
+    @property
+    def segments(self) -> list[str]:
+        """Статические куски текста вокруг пропусков: фронт рисует segment, input, segment, …
+        Их на единицу больше, чем пропусков."""
+        return self.template.split(PHRASE_BLANK_TOKEN)
+
+    def __str__(self) -> str:
+        if self.name:
+            return self.name
+        return self.template[:40] + ("…" if len(self.template) > 40 else "")
+
+
+class FreeTextPrompt(models.Model):
+    """Простой промпт для свободного ввода: name + description (что написать), а сам текст гость
+    вводит/редактирует в отзыве (FreeTextPromptReview.text)."""
+
+    name = models.CharField(max_length=127)
+    description = models.TextField(blank=True, null=True)
+    order = models.PositiveIntegerField(default=0)
+    taste_block = models.ForeignKey(
+        TasteBlock, on_delete=models.SET_NULL, null=True, blank=True, default=None, related_name="free_text_prompts"
+    )
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Product(models.Model):
     # common
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -192,6 +247,8 @@ class Tasting(models.Model):
         default=ProductTypeEnum.ICE_CREAM,
     )
     date = models.DateTimeField()
+    # Показывать ли на фронте в карточке блюда кнопку «номинировать в кандидаты на пьедестал».
+    show_podium_candidates = models.BooleanField(default=True)
     products = models.ManyToManyField(Product, through="ProductTasting", related_name="tastings", blank=True)
     participants = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
@@ -221,6 +278,15 @@ class ProductTasting(models.Model):
     )
     taste_blocks = models.ManyToManyField(
         TasteBlock, through="ProductTastingTasteBlock", related_name="product_tastings", blank=True
+    )
+    phrase_templates = models.ManyToManyField(
+        PhraseTemplate, through="ProductTastingPhraseTemplate", related_name="product_tastings", blank=True
+    )
+    # Чарт можно привязать целиком — в карточку едут все его TasteCriteria. Это удобнее, чем
+    # перечислять критерии чарта по одному. Автономные (chart IS NULL) критерии — через taste_criteria.
+    charts = models.ManyToManyField(Chart, through="ProductTastingChart", related_name="product_tastings", blank=True)
+    free_text_prompts = models.ManyToManyField(
+        FreeTextPrompt, through="ProductTastingFreeTextPrompt", related_name="product_tastings", blank=True
     )
 
     def __str__(self) -> str:
@@ -256,6 +322,55 @@ class ProductTastingTasteBlock(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product_tasting} — {self.taste_block}"
+
+
+class ProductTastingPhraseTemplate(models.Model):
+    product_tasting = models.ForeignKey(ProductTasting, on_delete=models.CASCADE)
+    phrase_template = models.ForeignKey(PhraseTemplate, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product_tasting", "phrase_template"], name="uniq_product_tasting_phrase_template"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_tasting} — {self.phrase_template}"
+
+
+class ProductTastingChart(models.Model):
+    product_tasting = models.ForeignKey(ProductTasting, on_delete=models.CASCADE)
+    chart = models.ForeignKey(Chart, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["product_tasting", "chart"], name="uniq_product_tasting_chart"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_tasting} — {self.chart}"
+
+
+class ProductTastingFreeTextPrompt(models.Model):
+    product_tasting = models.ForeignKey(ProductTasting, on_delete=models.CASCADE)
+    free_text_prompt = models.ForeignKey(FreeTextPrompt, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product_tasting", "free_text_prompt"], name="uniq_product_tasting_free_text_prompt"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_tasting} — {self.free_text_prompt}"
 
 
 class TastingParticipation(models.Model):
@@ -354,6 +469,35 @@ class ProductCriteriaReview(models.Model):
         return f"{self.product_review} — {self.criteria}: {self.mark}{suffix}"
 
 
+class PhraseTemplateReview(models.Model):
+    product_review = models.ForeignKey(ProductReview, on_delete=models.CASCADE, related_name="phrase_reviews")
+    phrase_template = models.ForeignKey(PhraseTemplate, on_delete=models.CASCADE, related_name="+")
+    # answers — список строк по одному значению на каждый пропуск шаблона, по порядку.
+    answers = models.JSONField(default=list)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["product_review", "phrase_template"], name="uniq_phrase_template_review"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_review} — {self.phrase_template}"
+
+
+class FreeTextPromptReview(models.Model):
+    product_review = models.ForeignKey(ProductReview, on_delete=models.CASCADE, related_name="free_text_reviews")
+    free_text_prompt = models.ForeignKey(FreeTextPrompt, on_delete=models.CASCADE, related_name="+")
+    text = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["product_review", "free_text_prompt"], name="uniq_free_text_prompt_review"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_review} — {self.free_text_prompt}"
+
+
 class ProductTastingUserMark(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -372,10 +516,13 @@ class ProductTastingUserMark(models.Model):
         related_name="user_marks",
     )
     is_nominated = models.BooleanField(default=False)
+    # Место в рейтинге блюд гостя для этой дегустации (1 = лучшее). Раньше ограничивалось топ-3,
+    # теперь можно отранжировать все блюда (1..N) через podium-эндпоинт. В результат как «подиум»
+    # всё равно идут места 1..3. NULL — блюдо не отранжировано.
     podium_place = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
-        validators=[MinValueValidator(1), MaxValueValidator(3)],
+        validators=[MinValueValidator(1)],
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -7,11 +7,18 @@ from .models import (
     IceCreamLogo,
     TasteTags,
     Line,
+    FreeTextPrompt,
+    FreeTextPromptReview,
+    PhraseTemplate,
+    PhraseTemplateReview,
     Product,
     ProductCriteriaReview,
     ProductIceCreamLogo,
     ProductReview,
     ProductTasting,
+    ProductTastingChart,
+    ProductTastingFreeTextPrompt,
+    ProductTastingPhraseTemplate,
     ProductTastingTasteBlock,
     ProductTastingTasteCriteria,
     ProductTastingUserMark,
@@ -57,6 +64,30 @@ class TasteBlockAdmin(admin.ModelAdmin):
     ordering = ("name",)
 
 
+@admin.register(PhraseTemplate)
+class PhraseTemplateAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "name", "blanks_count", "taste_block")
+    list_editable = ("order", "taste_block")
+    list_filter = ("taste_block",)
+    search_fields = ("name", "template", "id")
+    autocomplete_fields = ("taste_block",)
+    ordering = ("order", "id")
+
+    @admin.display(description="Пропусков")
+    def blanks_count(self, obj: PhraseTemplate) -> int:
+        return obj.blanks_count
+
+
+@admin.register(FreeTextPrompt)
+class FreeTextPromptAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "name", "taste_block")
+    list_editable = ("order", "taste_block")
+    list_filter = ("taste_block",)
+    search_fields = ("name", "description", "id")
+    autocomplete_fields = ("taste_block",)
+    ordering = ("order", "id")
+
+
 @admin.register(Chart)
 class ChartAdmin(admin.ModelAdmin):
     list_display = ("id", "order", "name", "chart_type", "taste_block", "label_placement", "color")
@@ -65,6 +96,8 @@ class ChartAdmin(admin.ModelAdmin):
     search_fields = ("name", "id")
     autocomplete_fields = ("taste_block",)
     ordering = ("order", "id")
+    save_on_top = True
+    save_as = True  # «Сохранить как новый» — удобно клонировать конфиг чарта
     fieldsets = (
         (None, {"fields": ("name", "description", "order", "color", "chart_type", "taste_block")}),
         ("Круговой чарт", {"fields": ("label_placement",)}),
@@ -100,6 +133,7 @@ class ProductInTastingsInline(admin.TabularInline):
     model = ProductTasting
     extra = 0
     fk_name = "product"
+    show_change_link = True  # провалиться в конкретный ProductTasting (там конфиг оценки)
     autocomplete_fields = ("tasting",)
     fields = ("tasting", "category", "order", "tea_flavor_combination")
     ordering = ("tasting__date",)
@@ -116,6 +150,7 @@ class ProductAdmin(admin.ModelAdmin):
     autocomplete_fields = ("line",)
     filter_horizontal = ("taste_tags",)
     readonly_fields = ("thumb",)
+    save_on_top = True
     ordering = ("type", "number", "name")
     fieldsets = (
         (None, {"fields": ("type", "number", "name", "line")}),
@@ -158,9 +193,20 @@ class TastingParticipationInline(admin.TabularInline):
 class ProductTastingInline(admin.TabularInline):
     model = ProductTasting
     extra = 0
+    show_change_link = True  # из Tasting → конкретный ProductTasting (критерии/блоки/фразы)
     autocomplete_fields = ("product", "tea_flavor_combination")
     fields = ("product", "category", "order", "tea_flavor_combination")
     ordering = ("order",)
+
+
+class ProductTastingChartInline(admin.TabularInline):
+    model = ProductTastingChart
+    extra = 0
+    autocomplete_fields = ("chart",)
+    fields = ("chart", "order")
+    ordering = ("order",)
+    verbose_name = "Чарт (целиком, со всеми критериями)"
+    verbose_name_plural = "Чарты (привязка целиком)"
 
 
 class ProductTastingTasteCriteriaInline(admin.TabularInline):
@@ -169,6 +215,8 @@ class ProductTastingTasteCriteriaInline(admin.TabularInline):
     autocomplete_fields = ("criteria",)
     fields = ("criteria", "order", "for_tea_combination")
     ordering = ("order",)
+    verbose_name = "Автономный критерий (без чарта)"
+    verbose_name_plural = "Автономные критерии (без чарта)"
 
 
 class ProductTastingTasteBlockInline(admin.TabularInline):
@@ -181,11 +229,28 @@ class ProductTastingTasteBlockInline(admin.TabularInline):
     verbose_name_plural = "Разделы оценки (порядок в карточке)"
 
 
+class ProductTastingPhraseTemplateInline(admin.TabularInline):
+    model = ProductTastingPhraseTemplate
+    extra = 0
+    autocomplete_fields = ("phrase_template",)
+    fields = ("phrase_template", "order")
+    ordering = ("order",)
+
+
+class ProductTastingFreeTextPromptInline(admin.TabularInline):
+    model = ProductTastingFreeTextPrompt
+    extra = 0
+    autocomplete_fields = ("free_text_prompt",)
+    fields = ("free_text_prompt", "order")
+    ordering = ("order",)
+
+
 class TastingUserMarksInline(admin.TabularInline):
     model = ProductTastingUserMark
     fk_name = "tasting"
     extra = 0
     can_delete = False
+    show_change_link = True
     fields = ("user", "product_tasting", "is_nominated", "podium_place", "updated_at")
     readonly_fields = ("user", "product_tasting", "is_nominated", "podium_place", "updated_at")
     ordering = ("podium_place", "-updated_at")
@@ -205,6 +270,7 @@ class TastingAdmin(admin.ModelAdmin):
     list_filter = ("type", "date")
     search_fields = ("title", "id")
     date_hierarchy = "date"
+    save_on_top = True
     inlines = [ProductTastingInline, TastingParticipationInline, TastingUserMarksInline]
 
     def get_queryset(self, request):
@@ -227,13 +293,56 @@ class TastingAdmin(admin.ModelAdmin):
 
 @admin.register(ProductTasting)
 class ProductTastingAdmin(admin.ModelAdmin):
-    list_display = ("tasting", "product", "category", "order")
+    list_display = ("__str__", "category", "order", "charts_n", "criteria_n", "blocks_n", "phrases_n", "free_text_n")
     list_filter = ("tasting", "category")
     search_fields = ("product__name", "product__id", "tasting__title", "tasting__id", "category", "id")
     autocomplete_fields = ("product", "tasting", "tea_flavor_combination")
+    list_select_related = ("tasting", "product")
     ordering = ("tasting", "order")
+    save_on_top = True
     fields = ("tasting", "product", "category", "order", "tea_flavor_combination")
-    inlines = [ProductTastingTasteCriteriaInline, ProductTastingTasteBlockInline]
+    inlines = [
+        ProductTastingChartInline,
+        ProductTastingTasteCriteriaInline,
+        ProductTastingTasteBlockInline,
+        ProductTastingPhraseTemplateInline,
+        ProductTastingFreeTextPromptInline,
+    ]
+
+    def get_queryset(self, request):
+        from django.db.models import Count
+
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                _charts=Count("producttastingchart", distinct=True),
+                _criteria=Count("producttastingtastecriteria", distinct=True),
+                _blocks=Count("producttastingtasteblock", distinct=True),
+                _phrases=Count("producttastingphrasetemplate", distinct=True),
+                _free_text=Count("producttastingfreetextprompt", distinct=True),
+            )
+        )
+
+    @admin.display(description="Чартов", ordering="_charts")
+    def charts_n(self, obj):
+        return obj._charts
+
+    @admin.display(description="Свободных", ordering="_free_text")
+    def free_text_n(self, obj):
+        return obj._free_text
+
+    @admin.display(description="Автокритериев", ordering="_criteria")
+    def criteria_n(self, obj):
+        return obj._criteria
+
+    @admin.display(description="Блоков", ordering="_blocks")
+    def blocks_n(self, obj):
+        return obj._blocks
+
+    @admin.display(description="Фраз", ordering="_phrases")
+    def phrases_n(self, obj):
+        return obj._phrases
 
 
 class ProductCriteriaReviewInline(admin.TabularInline):
@@ -241,6 +350,20 @@ class ProductCriteriaReviewInline(admin.TabularInline):
     extra = 0
     autocomplete_fields = ("criteria",)
     fields = ("criteria", "x", "mark")
+
+
+class PhraseTemplateReviewInline(admin.TabularInline):
+    model = PhraseTemplateReview
+    extra = 0
+    autocomplete_fields = ("phrase_template",)
+    fields = ("phrase_template", "answers")
+
+
+class FreeTextPromptReviewInline(admin.TabularInline):
+    model = FreeTextPromptReview
+    extra = 0
+    autocomplete_fields = ("free_text_prompt",)
+    fields = ("free_text_prompt", "text")
 
 
 @admin.register(ProductReview)
@@ -262,7 +385,9 @@ class ProductReviewAdmin(admin.ModelAdmin):
     autocomplete_fields = ("user", "product_tasting")
     filter_horizontal = ("taste_tags",)
     readonly_fields = ("product", "created_at", "updated_at")
-    inlines = [ProductCriteriaReviewInline]
+    list_select_related = ("user", "product_tasting__tasting", "product")
+    save_on_top = True
+    inlines = [ProductCriteriaReviewInline, PhraseTemplateReviewInline, FreeTextPromptReviewInline]
     fieldsets = (
         (None, {"fields": ("user", "product_tasting", "product")}),
         ("Состояние", {"fields": ("tasted", "is_bookmarked")}),

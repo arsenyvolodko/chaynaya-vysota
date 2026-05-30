@@ -78,10 +78,19 @@ _TASTE_BLOCK_PROP = {
     ),
 }
 
+_ORDER_PROP = {
+    "type": "integer",
+    "description": (
+        "Сквозной порядок элемента ВНУТРИ блока (`ProductTasting<...>.order`). Шкала общая для всех "
+        "типов средств оценки (критерии/чарты/плоты/фразы/свободный текст) — фронт мёржит их в один "
+        "список по этому `order` в пределах одного `taste_block`."
+    ),
+}
+
 _STANDALONE_TASTE_CRITERIA_ITEM_SCHEMA = {
     "type": "object",
-    "properties": {**_TASTE_CRITERIA_ITEM_SCHEMA["properties"], "taste_block": _TASTE_BLOCK_PROP},
-    "required": _TASTE_CRITERIA_ITEM_SCHEMA["required"] + ["taste_block"],
+    "properties": {**_TASTE_CRITERIA_ITEM_SCHEMA["properties"], "taste_block": _TASTE_BLOCK_PROP, "order": _ORDER_PROP},
+    "required": _TASTE_CRITERIA_ITEM_SCHEMA["required"] + ["taste_block", "order"],
 }
 
 TASTE_CRITERIA_SCHEMA = {
@@ -126,9 +135,10 @@ CHARTS_SCHEMA = {
                 "description": "Где рендерить подписи критериев чарта: на вершинах многоугольника или на рёбрах.",
             },
             "taste_block": _TASTE_BLOCK_PROP,
+            "order": _ORDER_PROP,
             "criterias": {"type": "array", "items": _TASTE_CRITERIA_ITEM_SCHEMA},
         },
-        "required": ["id", "name", "description", "color", "label_placement", "taste_block", "criterias"],
+        "required": ["id", "name", "description", "color", "label_placement", "taste_block", "order", "criterias"],
     },
 }
 
@@ -181,6 +191,7 @@ PLOTS_SCHEMA = {
             "x_axis_name": {"type": "string", "nullable": True, "description": "Заголовок оси X."},
             "y_axis_name": {"type": "string", "nullable": True, "description": "Заголовок оси Y."},
             "taste_block": _TASTE_BLOCK_PROP,
+            "order": _ORDER_PROP,
             "criterias": {"type": "array", "items": _PLOT_CRITERIA_ITEM_SCHEMA},
         },
         "required": [
@@ -193,8 +204,63 @@ PLOTS_SCHEMA = {
             "x_axis_name",
             "y_axis_name",
             "taste_block",
+            "order",
             "criterias",
         ],
+    },
+}
+
+PHRASES_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Заготовленные фразы с пропусками (PhraseTemplate), сконфигурированные для этого продукта в "
+        "этой дегустации. Фронт рисует `segments` со вводами между ними (`blanks_count` пропусков) и "
+        "отправляет заполнения через `phrase_answers` в review."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string", "nullable": True, "description": "Служебное название шаблона."},
+            "template": {"type": "string", "description": "Исходный текст с токенами {blank} на месте пропусков."},
+            "segments": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Статические куски текста вокруг пропусков (на 1 больше, чем пропусков).",
+            },
+            "blanks_count": {"type": "integer", "description": "Сколько пропусков нужно заполнить."},
+            "taste_block": _TASTE_BLOCK_PROP,
+            "order": _ORDER_PROP,
+            "user_answers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Ответы текущего пользователя по пропускам (по порядку). Пустой список, если не заполнял.",
+            },
+        },
+        "required": ["id", "name", "template", "segments", "blanks_count", "taste_block", "order", "user_answers"],
+    },
+}
+
+FREE_TEXT_PROMPTS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Промпты для свободного ввода (FreeTextPrompt), сконфигурированные для этого продукта в этой "
+        "дегустации. Гость пишет произвольный текст; отправляется через `free_text_answers` в review."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string"},
+            "description": {"type": "string", "nullable": True},
+            "taste_block": _TASTE_BLOCK_PROP,
+            "order": _ORDER_PROP,
+            "user_text": {
+                "type": "string",
+                "description": "Текст текущего пользователя. Пустая строка, если он ничего не вводил.",
+            },
+        },
+        "required": ["id", "name", "description", "taste_block", "order", "user_text"],
     },
 }
 
@@ -323,6 +389,23 @@ class PlotMarkSerializer(serializers.Serializer):
     mark = serializers.IntegerField(help_text="Значение оси Y (из Chart.y_axis) — Y-координата точки.")
 
 
+class PhraseAnswerSerializer(serializers.Serializer):
+    phrase = serializers.IntegerField(
+        help_text="id PhraseTemplate, сконфигурированного для этого продукта в дегустации."
+    )
+    answers = serializers.ListField(
+        child=serializers.CharField(allow_blank=True),
+        help_text="По одному значению на каждый пропуск шаблона, по порядку. Длина должна совпадать с blanks_count.",
+    )
+
+
+class FreeTextAnswerSerializer(serializers.Serializer):
+    prompt = serializers.IntegerField(
+        help_text="id FreeTextPrompt, сконфигурированного для этого продукта в дегустации."
+    )
+    text = serializers.CharField(allow_blank=True, help_text="Произвольный текст пользователя.")
+
+
 class ProductReviewWriteSerializer(serializers.Serializer):
     global_comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     self_comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -342,6 +425,18 @@ class ProductReviewWriteSerializer(serializers.Serializer):
         required=False,
         help_text="Точки для Plot-критериев: список {criteria, x, mark}. criteria — id TasteCriteria, "
         "привязанного к Plot-чарту; x — деление оси X чарта; mark — значение оси Y.",
+    )
+    phrase_answers = PhraseAnswerSerializer(
+        many=True,
+        required=False,
+        help_text="Заполнения фраз-шаблонов: список {phrase, answers}. phrase — id PhraseTemplate; "
+        "answers — значения по пропускам по порядку (длина = blanks_count).",
+    )
+    free_text_answers = FreeTextAnswerSerializer(
+        many=True,
+        required=False,
+        help_text="Свободный текст по промптам: список {prompt, text}. prompt — id FreeTextPrompt; "
+        "text — произвольная строка (пустая строка очищает).",
     )
     taste_tags = serializers.ListField(
         child=serializers.IntegerField(),
@@ -369,6 +464,8 @@ class ProductInTastingSerializer(ProductSerializer):
     taste_criteria = serializers.SerializerMethodField()
     charts = serializers.SerializerMethodField()
     plots = serializers.SerializerMethodField()
+    phrases = serializers.SerializerMethodField()
+    free_text_prompts = serializers.SerializerMethodField()
     taste_blocks = serializers.SerializerMethodField()
     taste_tags = serializers.SerializerMethodField()
     tasted = serializers.SerializerMethodField()
@@ -388,6 +485,8 @@ class ProductInTastingSerializer(ProductSerializer):
             "taste_criteria",
             "charts",
             "plots",
+            "phrases",
+            "free_text_prompts",
             "taste_blocks",
             "taste_tags",
             "tasted",
@@ -512,56 +611,66 @@ class ProductInTastingSerializer(ProductSerializer):
                 continue
             item = self._criteria_item(row, marks)
             item["taste_block"] = row.criteria.taste_block_id
+            item["order"] = row.order
             out.append(item)
         return out
+
+    @staticmethod
+    def _chart_criteria_item(criteria, marks: dict[int, int]) -> dict:
+        # Критерий чарта приходит целиком из привязанного Chart, поэтому per-tasting through нет:
+        # for_tea_combination всегда False (match-критерий держим автономным).
+        return {
+            "id": criteria.id,
+            "name": criteria.name,
+            "description": criteria.description,
+            "grade": criteria.grade,
+            "orientation": criteria.orientation,
+            "for_tea_combination": False,
+            "user_grade_review": marks.get(criteria.id),
+        }
 
     @extend_schema_field(CHARTS_SCHEMA)
     def get_charts(self, obj: Product) -> list[dict]:
         marks = self._criteria_marks(obj)
-        charts_by_id: dict[int, dict] = {}
-        chart_sort_key: dict[int, tuple[int, int]] = {}
-        for row in self._criteria_rows(obj):
-            chart = row.criteria.chart
-            if chart is None or chart.chart_type == ChartTypeEnum.PLOT:
+        out = []
+        for row in obj.__dict__.get("_chart_rows", []):
+            chart = row.chart
+            if chart.chart_type == ChartTypeEnum.PLOT:
                 continue
-            bucket = charts_by_id.get(chart.id)
-            if bucket is None:
-                bucket = {
+            out.append(
+                {
                     "id": chart.id,
                     "name": chart.name,
                     "description": chart.description,
                     "color": chart.color,
                     "label_placement": chart.label_placement,
                     "taste_block": chart.taste_block_id,
-                    "criterias": [],
+                    "order": row.order,
+                    "criterias": [self._chart_criteria_item(c, marks) for c in chart.tastecriteria_set.all()],
                 }
-                charts_by_id[chart.id] = bucket
-                chart_sort_key[chart.id] = (chart.order, chart.id)
-            bucket["criterias"].append(self._criteria_item(row, marks))
-        return [charts_by_id[cid] for cid in sorted(charts_by_id, key=chart_sort_key.get)]
+            )
+        return out
 
     @staticmethod
-    def _plot_criteria_item(row, points: dict[int, list[dict]]) -> dict:
+    def _plot_series_item(criteria, points: dict[int, list[dict]]) -> dict:
         return {
-            "id": row.criteria_id,
-            "name": row.criteria.name,
-            "description": row.criteria.description,
-            "for_tea_combination": row.for_tea_combination,
-            "user_grade_review": points.get(row.criteria_id, []),
+            "id": criteria.id,
+            "name": criteria.name,
+            "description": criteria.description,
+            "for_tea_combination": False,
+            "user_grade_review": points.get(criteria.id, []),
         }
 
     @extend_schema_field(PLOTS_SCHEMA)
     def get_plots(self, obj: Product) -> list[dict]:
         points = self._plot_points(obj)
-        plots_by_id: dict[int, dict] = {}
-        plot_sort_key: dict[int, tuple[int, int]] = {}
-        for row in self._criteria_rows(obj):
-            chart = row.criteria.chart
-            if chart is None or chart.chart_type != ChartTypeEnum.PLOT:
+        out = []
+        for row in obj.__dict__.get("_chart_rows", []):
+            chart = row.chart
+            if chart.chart_type != ChartTypeEnum.PLOT:
                 continue
-            bucket = plots_by_id.get(chart.id)
-            if bucket is None:
-                bucket = {
+            out.append(
+                {
                     "id": chart.id,
                     "name": chart.name,
                     "description": chart.description,
@@ -571,12 +680,55 @@ class ProductInTastingSerializer(ProductSerializer):
                     "x_axis_name": chart.x_axis_name,
                     "y_axis_name": chart.y_axis_name,
                     "taste_block": chart.taste_block_id,
-                    "criterias": [],
+                    "order": row.order,
+                    "criterias": [self._plot_series_item(c, points) for c in chart.tastecriteria_set.all()],
                 }
-                plots_by_id[chart.id] = bucket
-                plot_sort_key[chart.id] = (chart.order, chart.id)
-            bucket["criterias"].append(self._plot_criteria_item(row, points))
-        return [plots_by_id[cid] for cid in sorted(plots_by_id, key=plot_sort_key.get)]
+            )
+        return out
+
+    @extend_schema_field(PHRASES_SCHEMA)
+    def get_phrases(self, obj: Product) -> list[dict]:
+        review = self._review(obj)
+        answers_by_phrase: dict[int, list] = {}
+        if review:
+            answers_by_phrase = {pr.phrase_template_id: pr.answers for pr in review.phrase_reviews.all()}
+        out = []
+        for row in obj.__dict__.get("_phrase_rows", []):
+            tpl = row.phrase_template
+            out.append(
+                {
+                    "id": tpl.id,
+                    "name": tpl.name,
+                    "template": tpl.template,
+                    "segments": tpl.segments,
+                    "blanks_count": tpl.blanks_count,
+                    "taste_block": tpl.taste_block_id,
+                    "order": row.order,
+                    "user_answers": answers_by_phrase.get(tpl.id, []),
+                }
+            )
+        return out
+
+    @extend_schema_field(FREE_TEXT_PROMPTS_SCHEMA)
+    def get_free_text_prompts(self, obj: Product) -> list[dict]:
+        review = self._review(obj)
+        text_by_prompt: dict[int, str] = {}
+        if review:
+            text_by_prompt = {r.free_text_prompt_id: r.text for r in review.free_text_reviews.all()}
+        out = []
+        for row in obj.__dict__.get("_free_text_rows", []):
+            prompt = row.free_text_prompt
+            out.append(
+                {
+                    "id": prompt.id,
+                    "name": prompt.name,
+                    "description": prompt.description,
+                    "taste_block": prompt.taste_block_id,
+                    "order": row.order,
+                    "user_text": text_by_prompt.get(prompt.id, ""),
+                }
+            )
+        return out
 
     # --- контекст дегустации ---
 
@@ -629,7 +781,7 @@ class TastingListSerializer(serializers.ModelSerializer):
 class TastingDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tasting
-        fields = ["id", "title", "description", "result_description", "type", "date"]
+        fields = ["id", "title", "description", "result_description", "type", "date", "show_podium_candidates"]
 
 
 class TastingParticipationSerializer(serializers.ModelSerializer):
@@ -785,9 +937,23 @@ class PodiumPatchSerializer(serializers.Serializer):
     first = serializers.UUIDField(required=False, allow_null=True)
     second = serializers.UUIDField(required=False, allow_null=True)
     third = serializers.UUIDField(required=False, allow_null=True)
+    ranking = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        help_text="Полный упорядоченный список product_id дегустации: место = позиция в списке "
+        "(1-е = лучшее, далее 2, 3, …). Ранжирует ВСЕ переданные блюда; не вошедшие в список "
+        "теряют место. Альтернатива first/second/third — нельзя слать вместе.",
+    )
 
     def validate(self, attrs):
-        non_null = [v for v in attrs.values() if v is not None]
+        if "ranking" in attrs:
+            if any(k in attrs for k in ("first", "second", "third")):
+                raise serializers.ValidationError("Use either `ranking` or first/second/third, not both.")
+            ids = attrs["ranking"]
+            if len(ids) != len(set(ids)):
+                raise serializers.ValidationError({"ranking": "Duplicate product ids in ranking."})
+            return attrs
+        non_null = [attrs[k] for k in ("first", "second", "third") if k in attrs and attrs[k] is not None]
         if len(non_null) != len(set(non_null)):
             raise serializers.ValidationError("Same product cannot occupy multiple podium places.")
         return attrs
@@ -797,6 +963,10 @@ class PodiumSnapshotSerializer(serializers.Serializer):
     first = serializers.UUIDField(allow_null=True)
     second = serializers.UUIDField(allow_null=True)
     third = serializers.UUIDField(allow_null=True)
+    ranking = serializers.ListField(
+        child=serializers.UUIDField(),
+        help_text="Полный упорядоченный список product_id, у которых есть место (по возрастанию места).",
+    )
 
 
 class ConfigSerializer(serializers.ModelSerializer):
