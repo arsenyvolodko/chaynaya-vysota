@@ -617,7 +617,7 @@ class ProductInTastingSerializer(ProductSerializer):
 
     @staticmethod
     def _chart_criteria_item(criteria, marks: dict[int, int]) -> dict:
-        # Критерий чарта приходит целиком из привязанного Chart, поэтому per-tasting through нет:
+        # Критерий ЯВНО привязанного чарта приходит целиком из Chart, per-tasting through нет:
         # for_tea_combination всегда False (match-критерий держим автономным).
         return {
             "id": criteria.id,
@@ -629,28 +629,6 @@ class ProductInTastingSerializer(ProductSerializer):
             "user_grade_review": marks.get(criteria.id),
         }
 
-    @extend_schema_field(CHARTS_SCHEMA)
-    def get_charts(self, obj: Product) -> list[dict]:
-        marks = self._criteria_marks(obj)
-        out = []
-        for row in obj.__dict__.get("_chart_rows", []):
-            chart = row.chart
-            if chart.chart_type == ChartTypeEnum.PLOT:
-                continue
-            out.append(
-                {
-                    "id": chart.id,
-                    "name": chart.name,
-                    "description": chart.description,
-                    "color": chart.color,
-                    "label_placement": chart.label_placement,
-                    "taste_block": chart.taste_block_id,
-                    "order": row.order,
-                    "criterias": [self._chart_criteria_item(c, marks) for c in chart.tastecriteria_set.all()],
-                }
-            )
-        return out
-
     @staticmethod
     def _plot_series_item(criteria, points: dict[int, list[dict]]) -> dict:
         return {
@@ -661,30 +639,104 @@ class ProductInTastingSerializer(ProductSerializer):
             "user_grade_review": points.get(criteria.id, []),
         }
 
+    @staticmethod
+    def _plot_series_item_from_row(row, points: dict[int, list[dict]]) -> dict:
+        return {
+            "id": row.criteria_id,
+            "name": row.criteria.name,
+            "description": row.criteria.description,
+            "for_tea_combination": row.for_tea_combination,
+            "user_grade_review": points.get(row.criteria_id, []),
+        }
+
+    def _collect_chart_entries(self, obj: Product, *, is_plot: bool, build_explicit, build_implicit) -> list[dict]:
+        """Собирает чарты заданного типа из ДВУХ источников:
+        - ЯВНАЯ привязка `ProductTasting.charts` (`_chart_rows`) → чарт со ВСЕМИ его критериями, `order`
+          из `ProductTastingChart.order`;
+        - НЕЯВНО через критерии (`_criteria_rows`, у которых `criteria.chart` задан, но чарт НЕ привязан
+          явно) → чарт только с критериями, реально входящими в этот ProductTasting (подмножество),
+          `order` = минимальный `order` среди этих критериев.
+        Явная привязка имеет приоритет: если чарт привязан, его through-критерии игнорируются.
+        Возвращает entries [{chart, order, criterias}], отсортированные по (order, chart.id)."""
+        entries: dict[int, dict] = {}
+        explicit_ids: set[int] = set()
+
+        for row in obj.__dict__.get("_chart_rows", []):
+            chart = row.chart
+            if (chart.chart_type == ChartTypeEnum.PLOT) != is_plot:
+                continue
+            explicit_ids.add(chart.id)
+            entries[chart.id] = {
+                "chart": chart,
+                "order": row.order,
+                "criterias": [build_explicit(c) for c in chart.tastecriteria_set.all()],
+            }
+
+        implicit_rows: dict[int, list] = {}
+        for row in self._criteria_rows(obj):
+            chart = row.criteria.chart
+            if chart is None or (chart.chart_type == ChartTypeEnum.PLOT) != is_plot:
+                continue
+            if chart.id in explicit_ids:
+                continue
+            implicit_rows.setdefault(chart.id, []).append(row)
+        for cid, rows in implicit_rows.items():
+            entries[cid] = {
+                "chart": rows[0].criteria.chart,
+                "order": min(r.order for r in rows),
+                "criterias": [build_implicit(r) for r in rows],
+            }
+
+        return [entries[cid] for cid in sorted(entries, key=lambda c: (entries[c]["order"], entries[c]["chart"].id))]
+
+    @extend_schema_field(CHARTS_SCHEMA)
+    def get_charts(self, obj: Product) -> list[dict]:
+        marks = self._criteria_marks(obj)
+        entries = self._collect_chart_entries(
+            obj,
+            is_plot=False,
+            build_explicit=lambda c: self._chart_criteria_item(c, marks),
+            build_implicit=lambda r: self._criteria_item(r, marks),
+        )
+        return [
+            {
+                "id": e["chart"].id,
+                "name": e["chart"].name,
+                "description": e["chart"].description,
+                "color": e["chart"].color,
+                "label_placement": e["chart"].label_placement,
+                "taste_block": e["chart"].taste_block_id,
+                "order": e["order"],
+                "criterias": e["criterias"],
+            }
+            for e in entries
+        ]
+
     @extend_schema_field(PLOTS_SCHEMA)
     def get_plots(self, obj: Product) -> list[dict]:
         points = self._plot_points(obj)
-        out = []
-        for row in obj.__dict__.get("_chart_rows", []):
-            chart = row.chart
-            if chart.chart_type != ChartTypeEnum.PLOT:
-                continue
-            out.append(
-                {
-                    "id": chart.id,
-                    "name": chart.name,
-                    "description": chart.description,
-                    "color": chart.color,
-                    "x_axis": chart.x_axis,
-                    "y_axis": chart.y_axis,
-                    "x_axis_name": chart.x_axis_name,
-                    "y_axis_name": chart.y_axis_name,
-                    "taste_block": chart.taste_block_id,
-                    "order": row.order,
-                    "criterias": [self._plot_series_item(c, points) for c in chart.tastecriteria_set.all()],
-                }
-            )
-        return out
+        entries = self._collect_chart_entries(
+            obj,
+            is_plot=True,
+            build_explicit=lambda c: self._plot_series_item(c, points),
+            build_implicit=lambda r: self._plot_series_item_from_row(r, points),
+        )
+        return [
+            {
+                "id": e["chart"].id,
+                "name": e["chart"].name,
+                "description": e["chart"].description,
+                "color": e["chart"].color,
+                "x_axis": e["chart"].x_axis,
+                "y_axis": e["chart"].y_axis,
+                "x_axis_name": e["chart"].x_axis_name,
+                "y_axis_name": e["chart"].y_axis_name,
+                "taste_block": e["chart"].taste_block_id,
+                "order": e["order"],
+                "criterias": e["criterias"],
+            }
+            for e in entries
+        ]
 
     @extend_schema_field(PHRASES_SCHEMA)
     def get_phrases(self, obj: Product) -> list[dict]:

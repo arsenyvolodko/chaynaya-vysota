@@ -586,18 +586,25 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
         for m in favorite_marks
     ]
 
-    # Конфиг оценки берём с уровня ProductTasting этой дегустации из ДВУХ источников:
-    # автономные критерии (chart IS NULL) через taste_criteria + критерии привязанных чартов через charts.
-    # criteria_product_count — сколько позиций дегустации содержат критерий (на каждую позицию по +1).
+    # Конфиг оценки берём с уровня ProductTasting этой дегустации из ТРЁХ источников:
+    # 1) автономные критерии (chart IS NULL) через taste_criteria;
+    # 2) критерии ЯВНО привязанных чартов (charts) — весь чарт;
+    # 3) критерии чартов, добавленные через taste_criteria поштучно, чей чарт НЕ привязан явно к этой
+    #    позиции — подмножество (обратная совместимость).
+    # criteria_product_count — сколько позиций дегустации содержат критерий (на каждую позицию по +1);
+    # пару (позиция, критерий) учитываем один раз, даже если она есть и в charts, и в through.
     criteria_obj_by_id: dict[int, TasteCriteria] = {}
     criteria_product_count: dict[int, int] = defaultdict(int)
+    counted_pairs: set[tuple] = set()  # (product_tasting_id, criteria_id)
 
     standalone_rows = ProductTastingTasteCriteria.objects.filter(
         product_tasting__tasting=tasting, criteria__chart__isnull=True
     ).select_related("criteria")
     for row in standalone_rows:
         criteria_obj_by_id[row.criteria_id] = row.criteria
-        criteria_product_count[row.criteria_id] += 1
+        if (row.product_tasting_id, row.criteria_id) not in counted_pairs:
+            counted_pairs.add((row.product_tasting_id, row.criteria_id))
+            criteria_product_count[row.criteria_id] += 1
 
     chart_rows = (
         ProductTastingChart.objects.filter(product_tasting__tasting=tasting)
@@ -607,7 +614,18 @@ def _build_tasting_result(participation: TastingParticipation, request) -> dict:
     for row in chart_rows:
         for criteria in row.chart.tastecriteria_set.all():
             criteria_obj_by_id[criteria.id] = criteria
-            criteria_product_count[criteria.id] += 1
+            if (row.product_tasting_id, criteria.id) not in counted_pairs:
+                counted_pairs.add((row.product_tasting_id, criteria.id))
+                criteria_product_count[criteria.id] += 1
+
+    implicit_chart_rows = ProductTastingTasteCriteria.objects.filter(
+        product_tasting__tasting=tasting, criteria__chart__isnull=False
+    ).select_related("criteria", "criteria__chart")
+    for row in implicit_chart_rows:
+        criteria_obj_by_id[row.criteria_id] = row.criteria
+        if (row.product_tasting_id, row.criteria_id) not in counted_pairs:
+            counted_pairs.add((row.product_tasting_id, row.criteria_id))
+            criteria_product_count[row.criteria_id] += 1
 
     user_totals: dict[int, int] = defaultdict(int)
     if criteria_obj_by_id:
