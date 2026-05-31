@@ -217,8 +217,8 @@ class Product(models.Model):
     tea_plucking_season = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_rubrucator = models.CharField(max_length=127, null=True, blank=True, default=None)
     tea_cultivar = models.CharField(max_length=127, null=True, blank=True, default=None)
-    altitude = models.CharField(max_length=127, null=True, blank=True, default=None)
-    color_type_name = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_altitude = models.CharField(max_length=127, null=True, blank=True, default=None)
+    tea_color_type_name = models.CharField(max_length=127, null=True, blank=True, default=None)
 
     # ice cream
     number = models.IntegerField(null=True, blank=True, default=None)

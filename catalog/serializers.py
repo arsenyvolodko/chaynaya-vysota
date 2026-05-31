@@ -392,6 +392,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "tea_geography",
             "tea_plucking_season",
             "tea_rubrucator",
+            "tea_cultivar",
+            "tea_altitude",
+            "tea_color_type_name",
             "tea_latitude",
             "tea_longitude",
         ]
